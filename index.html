@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Análise de Estoque - Santa Cruz</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- HEADER -->
+        <header class="header">
+            <div class="header-content">
+                <h1>📊 Análise de Estoque Distribuidora</h1>
+                <p class="subtitle">Santa Cruz - Mapa de Estoque por Reserva</p>
+            </div>
+            <div class="upload-section">
+                <label for="fileInput" class="file-label">
+                    <span class="file-icon">📁</span>
+                    <span id="fileName">Selecionar Planilha Excel</span>
+                </label>
+                <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
+                <button id="exportBtn" class="btn-secondary" style="display:none;">⬇ Exportar Excel</button>
+                <button id="clearBtn" class="btn-secondary" style="display:none;">Limpar Dados</button>
+            </div>
+        </header>
+
+        <!-- TABS NAVIGATION -->
+        <div class="tabs-container">
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="overview">📈 Visão Geral</button>
+                <button class="tab-btn" data-tab="products">📦 Produtos</button>
+                <button class="tab-btn" data-tab="recommendations" title="Quanto comprar para cada produto atingir 60 dias de cobertura de estoque (meta padrão, ajustável por linha)">💡 Sugestões de Compra (60 dias)</button>
+                <button class="tab-btn" data-tab="details">🔍 Detalhes</button>
+            </div>
+        </div>
+
+        <!-- MAIN CONTENT -->
+        <main class="main-content">
+
+            <!-- TAB: VISÃO GERAL -->
+            <section class="tab-content active" id="overview">
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label>Filtrar por CD:</label>
+                        <select id="cdFilter" class="filter-select">
+                            <option value="">Todos os CDs</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Filtrar por Curva:</label>
+                        <select id="curvaFilter" class="filter-select">
+                            <option value="">Todas as Curvas</option>
+                            <option value="A">Curva A</option>
+                            <option value="B">Curva B</option>
+                            <option value="C">Curva C</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Filtrar por Status:</label>
+                        <select id="statusFilter" class="filter-select">
+                            <option value="">Todos</option>
+                            <option value="deficit">Necessidade de compra (&lt; 45 dias)</option>
+                            <option value="saudavel">Necessidade de compra (45-60 dias)</option>
+                            <option value="excesso">Atenção (60-100 dias)</option>
+                            <option value="sem-giro">Problema (&gt; 100 dias)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="kpi-grid">
+                    <div class="kpi-card kpi-clickable" data-kpi="total">
+                        <div class="kpi-value" id="kpiEstoqueTotal">--</div>
+                        <div class="kpi-label">Estoque Livre Total (R$)</div>
+                        <div class="kpi-cta">Ver todos os produtos →</div>
+                    </div>
+                    <div class="kpi-card kpi-clickable" data-kpi="excesso">
+                        <div class="kpi-value excesso" id="kpiExcesso">--</div>
+                        <div class="kpi-label" id="kpiExcessoLabel">Atenção (60-100 dias)</div>
+                        <div class="kpi-cta">Ver produtos em atenção →</div>
+                    </div>
+                    <div class="kpi-card kpi-clickable" data-kpi="sem-giro">
+                        <div class="kpi-value sem-giro" id="kpiSemGiro">--</div>
+                        <div class="kpi-label" id="kpiSemGiroLabel">Problema (&gt;100 dias)</div>
+                        <div class="kpi-cta">Ver produtos problema →</div>
+                    </div>
+                    <div class="kpi-card kpi-clickable" data-kpi="compra">
+                        <div class="kpi-value" id="kpiCds">--</div>
+                        <div class="kpi-label" id="kpiCdsLabel">Necessidade de compra (&lt;60 dias)</div>
+                        <div class="kpi-cta">Ver sugestões de compra →</div>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <h3>Média de Dias de Estoque por CD</h3>
+                    <div id="cdAverageChart"></div>
+                </div>
+            </section>
+
+            <!-- TAB: PRODUTOS -->
+            <section class="tab-content" id="products">
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label>Filtrar por CD:</label>
+                        <select id="productCdFilter" class="filter-select">
+                            <option value="">Todos os CDs</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Buscar Produto:</label>
+                        <input type="text" id="productSearch" class="filter-input" placeholder="Nome ou código do produto...">
+                    </div>
+                    <div class="filter-group">
+                        <label>Ordenar por:</label>
+                        <select id="sortBy" class="filter-select">
+                            <option value="dias-asc">Dias Estoque (menor)</option>
+                            <option value="dias-desc">Dias Estoque (maior)</option>
+                            <option value="venda-desc">Venda Média (maior)</option>
+                            <option value="estoque-desc">Estoque Livre (maior)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="activeFilters" class="active-filters" style="display:none;"></div>
+
+                <div class="table-container">
+                    <table class="products-table">
+                        <thead>
+                            <tr>
+                                <th>CD</th>
+                                <th>Material</th>
+                                <th>Fornecedor</th>
+                                <th>Curva</th>
+                                <th>Venda/mês</th>
+                                <th>Estoque Livre</th>
+                                <th>Dias Estoque</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="productsTableBody">
+                            <tr class="empty-state">
+                                <td colspan="8">Carregue uma planilha para visualizar produtos</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- TAB: ANÁLISE POR CD -->
+            <section class="tab-content" id="cd-analysis">
+                <div class="cd-grid" id="cdGrid">
+                    <div class="empty-state">Carregue uma planilha para visualizar análise por CD</div>
+                </div>
+            </section>
+
+            <!-- TAB: SUGESTÕES DE COMPRA -->
+            <section class="tab-content" id="recommendations">
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label>Selecionar CD:</label>
+                        <select id="recCdFilter" class="filter-select">
+                            <option value="">Todos os CDs (visão geral)</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Focar em:</label>
+                        <select id="recFilter" class="filter-select">
+                            <option value="deficit">Necessidade de compra (&lt; 60 dias)</option>
+                            <option value="urgent">Compra urgente (&lt; 30 dias)</option>
+                            <option value="performance">Estoque parado (atenção + problema)</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Curva:</label>
+                        <select id="recCurvaFilter" class="filter-select">
+                            <option value="">Todas</option>
+                            <option value="A">Curva A</option>
+                            <option value="B">Curva B</option>
+                            <option value="C">Curva C</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="recommendations-container" id="recommendationsContainer">
+                    <div class="empty-state">Carregue uma planilha para gerar sugestões de compra</div>
+                </div>
+            </section>
+
+            <!-- TAB: DETALHES -->
+            <section class="tab-content" id="details">
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label>Selecionar CDs:</label>
+                        <div class="multiselect" id="msCD">
+                            <button type="button" class="ms-toggle" id="msCDToggle">
+                                <span id="msCDLabel">Todos os CDs</span><span class="ms-arrow">▾</span>
+                            </button>
+                            <div class="ms-dropdown" id="msCDDropdown"></div>
+                        </div>
+                        <div class="ms-chips" id="msCDChips"></div>
+                    </div>
+                    <div class="filter-group">
+                        <label>Selecionar Produtos:</label>
+                        <div class="multiselect" id="msProd">
+                            <button type="button" class="ms-toggle" id="msProdToggle">
+                                <span id="msProdLabel">Nenhum produto selecionado</span><span class="ms-arrow">▾</span>
+                            </button>
+                            <div class="ms-dropdown" id="msProdDropdown">
+                                <input type="text" class="ms-search" id="msProdSearch" placeholder="Buscar produto...">
+                                <div class="ms-options" id="msProdOptions"></div>
+                            </div>
+                        </div>
+                        <div class="ms-chips" id="msProdChips"></div>
+                    </div>
+                </div>
+
+                <div id="detailBlocks"></div>
+                <div id="noDetailSelected" class="empty-state">Selecione ao menos um produto para ver detalhes</div>
+            </section>
+
+        </main>
+
+        <!-- FOOTER -->
+        <footer class="footer">
+            <p>Dashboard de Análise de Estoque • Dados carregados até: <span id="dataDate">--</span></p>
+        </footer>
+    </div>
+
+    <script src="xlsx.full.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
