@@ -235,6 +235,88 @@ function ativarAba(tabId) {
 // UPLOAD E LEITURA DO EXCEL
 // ============================================
 
+// ============================================
+// PERSISTÊNCIA LOCAL DA PLANILHA (IndexedDB)
+// Guarda o arquivo no navegador para reabrir já carregado.
+// Apagado somente em "Limpar Dados".
+// ============================================
+const IDB_DB = 'santacruz-dashboard';
+const IDB_STORE = 'arquivo';
+const IDB_KEY = 'planilha';
+const LS_NOME = 'sc_nome_arquivo';
+
+function idbOpen() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(IDB_DB, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+async function idbSalvar(buffer) {
+    try {
+        const db = await idbOpen();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readwrite');
+            tx.objectStore(IDB_STORE).put(buffer, IDB_KEY);
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+    } catch (e) { console.warn('Não foi possível salvar a planilha localmente:', e); }
+}
+async function idbCarregar() {
+    try {
+        const db = await idbOpen();
+        const buffer = await new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readonly');
+            const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => reject(req.error);
+        });
+        db.close();
+        return buffer;
+    } catch (e) { console.warn('Não foi possível ler a planilha salva:', e); return null; }
+}
+async function idbApagar() {
+    try {
+        const db = await idbOpen();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readwrite');
+            tx.objectStore(IDB_STORE).delete(IDB_KEY);
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+    } catch (e) { console.warn('Não foi possível apagar a planilha salva:', e); }
+    try { localStorage.removeItem(LS_NOME); } catch (e) {}
+}
+
+// Processa um buffer de Excel e monta o dashboard (usado pelo upload e pela restauração)
+function carregarPlanilha(buffer, nomeArquivo) {
+    const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+    const processedData = processWorkbook(workbook, nomeArquivo);
+    if (!processedData || processedData.products.length === 0) {
+        throw new Error('Nenhum produto encontrado nas abas de curva (CURVA - A/B/C).');
+    }
+    dashboardData = processedData;
+    originalProducts = processedData.products;
+    computarAmbiguidade(originalProducts);
+    skuProducts = agregarPorSKU(processedData.products, processedData.diasCorridos);
+    allProducts = processedData.products.slice();
+    currentView = 'cd';
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-view') === 'cd'));
+    cdFilter.disabled = false;
+    document.getElementById('fileName').textContent = nomeArquivo;
+    document.getElementById('dataDate').textContent = processedData.dataReferencia;
+    clearBtn.style.display = 'inline-block';
+    exportBtn.style.display = 'inline-block';
+    fileInput.value = '';
+    populateFilters();
+    updateAllVisualizations();
+    console.log('Dashboard carregado:', originalProducts.length, 'produtos');
+}
+
 async function handleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -246,37 +328,11 @@ async function handleFileUpload(event) {
 
     try {
         console.log('Lendo arquivo:', file.name, '(' + (file.size / 1024 / 1024).toFixed(2) + ' MB)');
-
         const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
-
-        console.log('Abas encontradas:', workbook.SheetNames);
-
-        const processedData = processWorkbook(workbook, file.name);
-
-        if (!processedData || processedData.products.length === 0) {
-            throw new Error('Nenhum produto encontrado nas abas de curva (CURVA - A/B/C).');
-        }
-
-        dashboardData = processedData;
-        originalProducts = processedData.products;
-        computarAmbiguidade(originalProducts);
-        skuProducts = agregarPorSKU(processedData.products, processedData.diasCorridos);
-        allProducts = processedData.products.slice();
-        currentView = 'cd';
-        document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-view') === 'cd'));
-        cdFilter.disabled = false;
-
-        document.getElementById('fileName').textContent = file.name;
-        document.getElementById('dataDate').textContent = processedData.dataReferencia;
-        clearBtn.style.display = 'inline-block';
-        exportBtn.style.display = 'inline-block';
-        fileInput.value = '';
-
-        populateFilters();
-        updateAllVisualizations();
-
-        console.log('Dashboard carregado:', originalProducts.length, 'produtos');
+        carregarPlanilha(buffer, file.name);
+        // Guarda para reabrir já carregado (persiste até "Limpar Dados")
+        idbSalvar(buffer);
+        try { localStorage.setItem(LS_NOME, file.name); } catch (e) {}
     } catch (error) {
         console.error('Erro ao processar:', error);
         alert('Erro ao processar o arquivo:\n' + error.message);
@@ -648,6 +704,7 @@ function consolidate(products, nomeArquivo, diasCorridos) {
 // ============================================
 
 function clearDashboard() {
+    idbApagar(); // remove a planilha guardada — só "Limpar Dados" zera o armazenamento
     dashboardData = null;
     allProducts = [];
     originalProducts = [];
@@ -1977,3 +2034,18 @@ function formatBRLCheio(v) {
 }
 
 console.log('Dashboard pronto. SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
+
+// Ao abrir o link, recarrega a última planilha salva (se houver). Some apenas em "Limpar Dados".
+(async function restaurarPlanilha() {
+    if (typeof XLSX === 'undefined') { console.warn('SheetJS indisponível; restauração ignorada.'); return; }
+    try {
+        const buffer = await idbCarregar();
+        if (!buffer) return;
+        let nome = 'Planilha salva';
+        try { nome = localStorage.getItem(LS_NOME) || nome; } catch (e) {}
+        carregarPlanilha(buffer, nome);
+        console.log('Planilha restaurada do armazenamento local.');
+    } catch (e) {
+        console.warn('Falha ao restaurar planilha salva:', e);
+    }
+})();
