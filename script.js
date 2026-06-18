@@ -135,6 +135,8 @@ tabButtons.forEach(btn => btn.addEventListener('click', handleTabClick));
 productSearch.addEventListener('input', applyFilters);
 sortBy.addEventListener('change', applyFilters);
 recFilter.addEventListener('change', updateRecommendations);
+const cdSalesSelectEl = document.getElementById('cdSalesSelect');
+if (cdSalesSelectEl) cdSalesSelectEl.addEventListener('change', renderVendasCDDetalhe);
 
 // --- Multi-seleção global (espelhada em várias abas) ---
 const MS_STATUS_LABEL = {
@@ -161,6 +163,7 @@ function aplicarTudo() {
     applyFilters();          // Visão Geral + Produtos
     updateRecommendations(); // Sugestões
     atualizarDetalhes();     // Detalhes
+    renderVendasCD();        // Vendas do CD
 }
 function atualizarDetalhes() {
     if (!dashboardData) return;
@@ -648,10 +651,11 @@ const MESES_CAP = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', '
 // Janela de meses ativa (5 meses: 4 cheios + o vigente parcial), derivada do nome do arquivo
 let JANELA = [];
 
-// Extrai dia/mês/ano do nome do arquivo. Aceita ano de 2 ou 4 dígitos.
-// Ex.: "..._17_06_2026_..." -> {dia:17, mes0:5, ano:2026}
+// Extrai dia/mês/ano do nome do arquivo. Aceita ano de 2 ou 4 dígitos e separador
+// ponto, underscore, hífen ou barra (ex.: "12.06.26", "12_06_2026", "12-06-26").
+// Ex.: "...base 12.06.26.xlsx" -> {dia:12, mes0:5, ano:2026}
 function parseDataArquivo(nomeArquivo) {
-    const m = nomeArquivo.match(/(\d{1,2})_(\d{1,2})_(\d{2,4})/);
+    const m = String(nomeArquivo || '').match(/(\d{1,2})[._\-\/](\d{1,2})[._\-\/](\d{2,4})/);
     if (!m) {
         const now = new Date();
         return { dia: now.getDate(), mes0: now.getMonth(), ano: now.getFullYear() };
@@ -956,6 +960,7 @@ function updateAllVisualizations() {
     updateCharts();
     updateCDAnalysis();
     updateRecommendations();
+    renderVendasCD();
 }
 
 function updateViewHint() {
@@ -1219,8 +1224,9 @@ function updateRecommendations() {
     const repostoTxt = jaRepostos > 0 ? ` · ${jaRepostos} já com reposição a caminho (fora da lista)` : '';
     const introHtml = `<div class="rec-intro">${intro}<br><strong>${lista.length} itens</strong> a comprar em ${escopo}${filter !== 'performance' ? ` · sugestão total: <span class="rec-total"><strong>${totalComprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}</span>${repostoTxt}${semMultTxt}` : ''}</div>`;
 
-    // Sempre lista compacta (tabela). Com 1 CD específico, esconde a coluna CD (redundante).
-    recListaAtual = aplicarOrdenacaoRec(lista).slice(0, 300);
+    // Lista compacta (tabela). Sem teto baixo: todos os pontos abaixo de 60 dias com
+    // necessidade de compra aparecem (o corte antigo de 300 escondia a maioria).
+    recListaAtual = aplicarOrdenacaoRec(lista).slice(0, 5000);
     container.innerHTML = introHtml + renderRecTable(recListaAtual, filter, filtroCD.size === 1);
 }
 
@@ -1896,7 +1902,7 @@ function createBarChartSimple(labels, values, color, isMoney) {
         const bw = slot * 0.6;
         bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${color}" opacity="0.85" rx="3"/>`;
         bars += `<text x="${(x + bw / 2).toFixed(1)}" y="${h - padB + 16}" text-anchor="middle" font-size="11" fill="#64748b">${labels[i]}</text>`;
-        const lbl = isMoney ? formatBRLShort(v) : v.toFixed(0);
+        const lbl = isMoney ? formatBRLShort(v) : Math.round(v).toLocaleString('pt-BR');
         bars += `<text x="${(x + bw / 2).toFixed(1)}" y="${(y - 5).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#1e293b">${lbl}</text>`;
     });
 
@@ -1904,6 +1910,90 @@ function createBarChartSimple(labels, values, color, isMoney) {
         <line x1="${padL}" y1="${padT + plotH}" x2="${w - padL}" y2="${padT + plotH}" stroke="#e2e8f0" stroke-width="1"/>
         ${bars}
     </svg>`;
+}
+
+// ============================================
+// ABA: VENDAS DO CD (histórico de saída mês a mês)
+// ============================================
+// Soma as vendas (unidades e R$) de todos os produtos do filtro global,
+// mês a mês. Mostra o total da distribuidora sempre; o detalhe de um CD
+// específico abre só quando escolhido no seletor.
+let cdSalesPorCD = {};
+function renderVendasCD() {
+    const totalBox = document.getElementById('cdSalesTotal');
+    const sel = document.getElementById('cdSalesSelect');
+    const detBox = document.getElementById('cdSalesDetalhe');
+    if (!totalBox || !sel || !detBox) return;
+    if (!dashboardData) {
+        totalBox.innerHTML = '<div class="empty-state">Carregue uma planilha para ver o histórico de vendas.</div>';
+        sel.innerHTML = '<option value="">Selecione um CD...</option>';
+        detBox.innerHTML = '';
+        cdSalesPorCD = {};
+        return;
+    }
+    const produtos = dashboardData.products.filter(p => dentroDoFiltroGlobal(p));
+    if (!produtos.length) {
+        totalBox.innerHTML = '<div class="empty-state">Nenhum produto no filtro atual.</div>';
+        sel.innerHTML = '<option value="">Selecione um CD...</option>';
+        detBox.innerHTML = '';
+        cdSalesPorCD = {};
+        return;
+    }
+    const totalUn = [0, 0, 0, 0, 0], totalRS = [0, 0, 0, 0, 0];
+    const porCD = {};
+    produtos.forEach(p => {
+        for (let i = 0; i < 5; i++) { totalUn[i] += p.vendas[i]; totalRS[i] += p.vendasRS[i]; }
+        const cd = p.cd || '—';
+        if (!porCD[cd]) porCD[cd] = { un: [0, 0, 0, 0, 0], rs: [0, 0, 0, 0, 0] };
+        for (let i = 0; i < 5; i++) { porCD[cd].un[i] += p.vendas[i]; porCD[cd].rs[i] += p.vendasRS[i]; }
+    });
+    cdSalesPorCD = porCD;
+    const cds = Object.keys(porCD);
+    const tituloTotal = cds.length === 1 ? cds[0] : 'Total da Distribuidora';
+    totalBox.innerHTML = blocoVendasCD(tituloTotal, totalUn, totalRS, true);
+
+    // Opções do seletor, em ordem alfabética de CD (média mensal no rótulo)
+    const volume = cd => porCD[cd].un.slice(0, 4).reduce((x, y) => x + y, 0);
+    const ord = cds.slice().sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const anterior = sel.value;
+    sel.innerHTML = '<option value="">Selecione um CD para ver o histórico individual...</option>' +
+        ord.map(cd => `<option value="${escapeHtml(cd)}">${escapeHtml(cd)} — média ${Math.round(volume(cd) / 4).toLocaleString('pt-BR')} un/mês</option>`).join('');
+    if (anterior && porCD[anterior]) sel.value = anterior; // preserva escolha entre atualizações
+    renderVendasCDDetalhe();
+}
+
+// Abre o bloco do CD selecionado (ou uma dica, se nenhum)
+function renderVendasCDDetalhe() {
+    const sel = document.getElementById('cdSalesSelect');
+    const detBox = document.getElementById('cdSalesDetalhe');
+    if (!sel || !detBox) return;
+    const cd = sel.value;
+    if (!cd || !cdSalesPorCD[cd]) {
+        detBox.innerHTML = '<p class="cd-sales-hint">Selecione um CD acima para abrir o histórico individual dele.</p>';
+        return;
+    }
+    detBox.innerHTML = blocoVendasCD(cd, cdSalesPorCD[cd].un, cdSalesPorCD[cd].rs, false);
+}
+
+function blocoVendasCD(titulo, un, rs, destaque) {
+    const labels = JANELA.map(m => m.abbr + (m.parcial ? '*' : ''));
+    const dias = dashboardData.diasCorridos || 0;
+    const parcial = un[4];
+    const proj = dias > 0 ? Math.round(parcial / dias * 30) : Math.round(parcial);
+    const media4 = Math.round((un[0] + un[1] + un[2] + un[3]) / 4);
+    const mediaRS4 = (rs[0] + rs[1] + rs[2] + rs[3]) / 4;
+    const chartUn = createBarChartSimple(labels, un.map(v => Math.round(v)), '#3b82f6') +
+        `<p class="chart-note">* ${mesVigenteNome()} parcial (até dia ${dias}). Projeção mês cheio: <strong>${proj.toLocaleString('pt-BR')} un</strong></p>`;
+    const chartRS = createBarChartSimple(labels, rs, '#10b981', true);
+    return `
+    <div class="detail-panel cd-sales-panel${destaque ? ' cd-sales-total' : ''}">
+        <h3>${escapeHtml(titulo)}
+            <span class="cd-sales-meta">média ${media4.toLocaleString('pt-BR')} un/mês • ${formatBRL(mediaRS4)}/mês nos 4 meses cheios</span></h3>
+        <div class="detail-grid">
+            <div class="detail-section"><h4>📊 Histórico de Vendas (Unidades)</h4>${chartUn}</div>
+            <div class="detail-section"><h4>💰 Histórico de Vendas (R$)</h4>${chartRS}</div>
+        </div>
+    </div>`;
 }
 
 // ============================================
@@ -1916,6 +2006,7 @@ function handleTabClick(e) {
     tabContents.forEach(c => c.classList.remove('active'));
     e.target.classList.add('active');
     document.getElementById(tab).classList.add('active');
+    if (tab === 'cd-sales') renderVendasCD();
 }
 
 // ============================================

@@ -595,6 +595,73 @@ canvas {
     font-size: 1rem;
 }
 
+/* VENDAS DO CD */
+.cd-sales-intro {
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+    margin: 0 0 1.25rem;
+    line-height: 1.5;
+}
+.cd-sales-sub {
+    margin: 1.75rem 0 0.5rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-tertiary, var(--text-secondary));
+}
+.cd-sales-panel { margin-bottom: 1.25rem; }
+.cd-sales-total {
+    border: 1px solid var(--primary);
+    box-shadow: var(--shadow-md);
+}
+.cd-sales-meta {
+    margin-left: auto;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.cd-sales-filter {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 1.75rem 0 0.75rem;
+}
+.cd-sales-filter label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-tertiary, var(--text-secondary));
+    white-space: nowrap;
+}
+.cd-sales-filter select {
+    flex: 1;
+    max-width: 420px;
+    padding: 0.6rem 0.85rem;
+    font: inherit;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border-strong, var(--border));
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+.cd-sales-filter select:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+.cd-sales-hint {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    padding: 1.5rem;
+    text-align: center;
+    background: var(--bg);
+    border: 1px dashed var(--border-strong, var(--border));
+    border-radius: var(--radius-sm);
+}
+
 /* FOOTER */
 .footer {
     background: var(--bg-card);

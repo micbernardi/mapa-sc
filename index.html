@@ -35,6 +35,7 @@
                 <button class="tab-btn" data-tab="products">📦 Produtos</button>
                 <button class="tab-btn" data-tab="recommendations" title="Quanto comprar para cada produto atingir 60 dias de cobertura de estoque (meta padrão, ajustável por linha)">💡 Sugestões de Compra (60 dias)</button>
                 <button class="tab-btn" data-tab="details">🔍 Detalhes</button>
+                <button class="tab-btn" data-tab="cd-sales" title="Histórico de saída (vendas) mês a mês, somando todos os produtos">🏭 Vendas do CD</button>
             </div>
         </div>
 
@@ -198,6 +199,16 @@
             </section>
 
             <!-- TAB: DETALHES -->
+            <section class="tab-content" id="cd-sales">
+                <p class="cd-sales-intro">Histórico de saída (vendas) mês a mês, somando todos os produtos. O mês vigente é parcial (projeção indicada abaixo do gráfico de unidades). Use os filtros globais de CD, Curva e Status nas outras abas para focar o total.</p>
+                <div id="cdSalesTotal"><div class="empty-state">Carregue uma planilha para ver o histórico de vendas.</div></div>
+                <div class="cd-sales-filter">
+                    <label for="cdSalesSelect">Detalhar um CD:</label>
+                    <select id="cdSalesSelect"><option value="">Selecione um CD...</option></select>
+                </div>
+                <div id="cdSalesDetalhe"></div>
+            </section>
+
             <section class="tab-content" id="details">
                 <div class="filters-row">
                     <div class="filter-group">
