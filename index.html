@@ -46,28 +46,30 @@
                 <div class="filters-row">
                     <div class="filter-group">
                         <label>Filtrar por CD:</label>
-                        <select id="cdFilter" class="filter-select">
-                            <option value="">Todos os CDs</option>
-                        </select>
+                        <div class="multiselect" id="msCd">
+                            <button type="button" class="ms-toggle" id="msCdToggle">Todos os CDs <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msCdDrop">
+                                <div class="ms-options" id="msCdOpts"></div>
+                            </div>
+                        </div>
                     </div>
                     <div class="filter-group">
                         <label>Filtrar por Curva:</label>
-                        <select id="curvaFilter" class="filter-select">
-                            <option value="">Todas as Curvas</option>
-                            <option value="A">Curva A</option>
-                            <option value="B">Curva B</option>
-                            <option value="C">Curva C</option>
-                        </select>
+                        <div class="multiselect" id="msCurva">
+                            <button type="button" class="ms-toggle" id="msCurvaToggle">Todas as Curvas <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msCurvaDrop">
+                                <div class="ms-options" id="msCurvaOpts"></div>
+                            </div>
+                        </div>
                     </div>
                     <div class="filter-group">
                         <label>Filtrar por Status:</label>
-                        <select id="statusFilter" class="filter-select">
-                            <option value="">Todos</option>
-                            <option value="deficit">Necessidade de compra (&lt; 45 dias)</option>
-                            <option value="saudavel">Necessidade de compra (45-60 dias)</option>
-                            <option value="excesso">Atenção (60-100 dias)</option>
-                            <option value="sem-giro">Problema (&gt; 100 dias)</option>
-                        </select>
+                        <div class="multiselect" id="msStatus">
+                            <button type="button" class="ms-toggle" id="msStatusToggle">Todos <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msStatusDrop">
+                                <div class="ms-options" id="msStatusOpts"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -105,9 +107,12 @@
                 <div class="filters-row">
                     <div class="filter-group">
                         <label>Filtrar por CD:</label>
-                        <select id="productCdFilter" class="filter-select">
-                            <option value="">Todos os CDs</option>
-                        </select>
+                        <div class="multiselect" id="msProdCd">
+                            <button type="button" class="ms-toggle" id="msProdCdToggle">Todos os CDs <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msProdCdDrop">
+                                <div class="ms-options" id="msProdCdOpts"></div>
+                            </div>
+                        </div>
                     </div>
                     <div class="filter-group">
                         <label>Buscar Produto:</label>
@@ -161,9 +166,12 @@
                 <div class="filters-row">
                     <div class="filter-group">
                         <label>Selecionar CD:</label>
-                        <select id="recCdFilter" class="filter-select">
-                            <option value="">Todos os CDs (visão geral)</option>
-                        </select>
+                        <div class="multiselect" id="msRecCd">
+                            <button type="button" class="ms-toggle" id="msRecCdToggle">Todos os CDs <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msRecCdDrop">
+                                <div class="ms-options" id="msRecCdOpts"></div>
+                            </div>
+                        </div>
                     </div>
                     <div class="filter-group">
                         <label>Focar em:</label>
@@ -175,12 +183,12 @@
                     </div>
                     <div class="filter-group">
                         <label>Curva:</label>
-                        <select id="recCurvaFilter" class="filter-select">
-                            <option value="">Todas</option>
-                            <option value="A">Curva A</option>
-                            <option value="B">Curva B</option>
-                            <option value="C">Curva C</option>
-                        </select>
+                        <div class="multiselect" id="msRecCurva">
+                            <button type="button" class="ms-toggle" id="msRecCurvaToggle">Todas as Curvas <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msRecCurvaDrop">
+                                <div class="ms-options" id="msRecCurvaOpts"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
