@@ -117,11 +117,13 @@ const exportBtn = document.getElementById('exportBtn');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabContents = document.querySelectorAll('.tab-content');
 
-const cdFilter = document.getElementById('cdFilter');
-const curvaFilter = document.getElementById('curvaFilter');
-const statusFilter = document.getElementById('statusFilter');
+// FILTRO GLOBAL de CD, Curva e Status (multi-seleção): um único estado válido para TODAS
+// as abas. Cada aba mostra um seletor que é apenas uma "janela" para o mesmo conjunto, e
+// todos ficam sincronizados. Conjunto vazio = "todos".
+const filtroCD = new Set();
+const filtroCurva = new Set();
+const filtroStatus = new Set();
 const productSearch = document.getElementById('productSearch');
-const productCdFilter = document.getElementById('productCdFilter');
 const sortBy = document.getElementById('sortBy');
 const recFilter = document.getElementById('recFilter');
 
@@ -130,15 +132,121 @@ fileInput.addEventListener('change', handleFileUpload);
 clearBtn.addEventListener('click', clearDashboard);
 tabButtons.forEach(btn => btn.addEventListener('click', handleTabClick));
 
-cdFilter.addEventListener('change', applyFilters);
-curvaFilter.addEventListener('change', applyFilters);
-statusFilter.addEventListener('change', applyFilters);
 productSearch.addEventListener('input', applyFilters);
-productCdFilter.addEventListener('change', applyFilters);
 sortBy.addEventListener('change', applyFilters);
 recFilter.addEventListener('change', updateRecommendations);
-document.getElementById('recCdFilter').addEventListener('change', updateRecommendations);
-document.getElementById('recCurvaFilter').addEventListener('change', updateRecommendations);
+
+// --- Multi-seleção global (espelhada em várias abas) ---
+const MS_STATUS_LABEL = {
+    deficit: 'Necessidade de compra (< 45 dias)',
+    saudavel: 'Necessidade de compra (45-60 dias)',
+    excesso: 'Atenção (60-100 dias)',
+    'sem-giro': 'Problema (> 100 dias)'
+};
+// Várias chaves apontam para o MESMO conjunto global (ex.: cd, prodCd e recCd = filtroCD).
+const MS_FILTROS = {
+    cd:       { set: filtroCD,     toggle: 'msCdToggle',       drop: 'msCdDrop',       opts: 'msCdOpts',       vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
+    prodCd:   { set: filtroCD,     toggle: 'msProdCdToggle',   drop: 'msProdCdDrop',   opts: 'msProdCdOpts',   vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
+    recCd:    { set: filtroCD,     toggle: 'msRecCdToggle',    drop: 'msRecCdDrop',    opts: 'msRecCdOpts',    vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
+    curva:    { set: filtroCurva,  toggle: 'msCurvaToggle',    drop: 'msCurvaDrop',    opts: 'msCurvaOpts',    vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v,            plural: n => n + ' curvas', onChange: aplicarTudo },
+    recCurva: { set: filtroCurva,  toggle: 'msRecCurvaToggle', drop: 'msRecCurvaDrop', opts: 'msRecCurvaOpts', vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v,            plural: n => n + ' curvas', onChange: aplicarTudo },
+    status:   { set: filtroStatus, toggle: 'msStatusToggle',   drop: 'msStatusDrop',   opts: 'msStatusOpts',   vazio: 'Todos',           rotulo: v => MS_STATUS_LABEL[v] || v, plural: n => n + ' status', onChange: aplicarTudo }
+};
+const MS_CD_KEYS = ['cd', 'prodCd', 'recCd'];
+const MS_CURVA_KEYS = ['curva', 'recCurva'];
+
+// Aplica e sincroniza TUDO quando qualquer filtro global muda
+function aplicarTudo() {
+    Object.keys(MS_FILTROS).forEach(q => msSincroniza(q)); // espelha o conjunto em todos os seletores
+    applyFilters();          // Visão Geral + Produtos
+    updateRecommendations(); // Sugestões
+    atualizarDetalhes();     // Detalhes
+}
+function atualizarDetalhes() {
+    if (!dashboardData) return;
+    const s = document.getElementById('msProdSearch');
+    buildDetailProductOptions(s ? s.value : '');
+    renderDetailBlocks();
+}
+// Um produto está dentro do filtro global de CD/Curva/Status?
+function dentroDoFiltroGlobal(p, { status = true } = {}) {
+    if (filtroCD.size && !filtroCD.has(p.cd)) return false;
+    if (filtroCurva.size && !filtroCurva.has(p.curva)) return false;
+    if (status && filtroStatus.size && !filtroStatus.has(p.status)) return false;
+    return true;
+}
+function msAtualizaToggle(qual) {
+    const cfg = MS_FILTROS[qual];
+    const btn = document.getElementById(cfg.toggle);
+    if (!btn) return;
+    const n = cfg.set.size;
+    const txt = n === 0 ? cfg.vazio : (n === 1 ? cfg.rotulo([...cfg.set][0]) : cfg.plural(n));
+    btn.innerHTML = `${escapeHtml(txt)} <span class="ms-arrow">▾</span>`;
+}
+function msMontaOpcoes(qual, items) {
+    const cfg = MS_FILTROS[qual];
+    const box = document.getElementById(cfg.opts);
+    if (!box) return;
+    if (!items.length) { box.innerHTML = '<div class="ms-empty">Sem opções</div>'; return; }
+    // Linha "Todos" no topo: marcada quando nada está selecionado (conjunto vazio = todos)
+    const todos = `<label class="ms-opt ms-opt-todos"><input type="checkbox" data-mstodos ${cfg.set.size === 0 ? 'checked' : ''}> <span>${escapeHtml(cfg.vazio)}</span></label>`;
+    const linhas = items.map(it => `<label class="ms-opt"><input type="checkbox" value="${escapeHtml(it.value)}" ${cfg.set.has(it.value) ? 'checked' : ''}> <span>${escapeHtml(it.label)}</span></label>`).join('');
+    box.innerHTML = todos + linhas;
+    const opt = box.querySelector('input[data-mstodos]');
+    if (opt) opt.addEventListener('change', () => { cfg.set.clear(); (cfg.onChange || aplicarTudo)(); });
+    box.querySelectorAll('input[type="checkbox"]:not([data-mstodos])').forEach(chk => {
+        chk.addEventListener('change', () => {
+            if (chk.checked) cfg.set.add(chk.value); else cfg.set.delete(chk.value);
+            (cfg.onChange || aplicarTudo)();
+        });
+    });
+    msAtualizaToggle(qual);
+}
+function msSincroniza(qual) {
+    const cfg = MS_FILTROS[qual];
+    const box = document.getElementById(cfg.opts);
+    if (box) {
+        box.querySelectorAll('input[type="checkbox"]:not([data-mstodos])').forEach(chk => { chk.checked = cfg.set.has(chk.value); });
+        const opt = box.querySelector('input[data-mstodos]');
+        if (opt) opt.checked = cfg.set.size === 0; // "Todos" marcado quando não há filtro
+    }
+    msAtualizaToggle(qual);
+}
+function msFechaTodos() {
+    Object.values(MS_FILTROS).forEach(cfg => {
+        const d = document.getElementById(cfg.drop);
+        const t = document.getElementById(cfg.toggle);
+        if (d) d.classList.remove('open');
+        if (t) t.classList.remove('active');
+    });
+}
+function setupFiltrosMulti() {
+    Object.keys(MS_FILTROS).forEach(qual => {
+        const cfg = MS_FILTROS[qual];
+        const btn = document.getElementById(cfg.toggle);
+        const drop = document.getElementById(cfg.drop);
+        if (!btn || !drop) return;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const aberto = drop.classList.contains('open');
+            msFechaTodos();
+            if (!aberto) { drop.classList.add('open'); btn.classList.add('active'); }
+        });
+        drop.addEventListener('click', e => e.stopPropagation());
+    });
+    document.addEventListener('click', msFechaTodos);
+    // Opções fixas de Curva (Visão Geral e Sugestões); CD entra em populateFilters
+    const curvas = [{ value: 'A', label: 'Curva A' }, { value: 'B', label: 'Curva B' }, { value: 'C', label: 'Curva C' }];
+    msMontaOpcoes('curva', curvas);
+    msMontaOpcoes('recCurva', curvas);
+    msMontaOpcoes('status', [
+        { value: 'deficit', label: MS_STATUS_LABEL.deficit },
+        { value: 'saudavel', label: MS_STATUS_LABEL.saudavel },
+        { value: 'excesso', label: MS_STATUS_LABEL.excesso },
+        { value: 'sem-giro', label: MS_STATUS_LABEL['sem-giro'] }
+    ]);
+}
+setupFiltrosMulti();
 
 // Exportar para Excel
 exportBtn.addEventListener('click', exportarExcel);
@@ -169,21 +277,6 @@ const detailProducts = new Set();   // materiais selecionados
 
 setupDetailMultiselects();
 
-// Botões de alternância de visão (CD vs SKU)
-document.querySelectorAll('.view-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        if (!dashboardData) return;
-        document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        currentView = btn.getAttribute('data-view');
-        // ao trocar de visão, alguns filtros não se aplicam ao modo SKU
-        const isSku = currentView === 'sku';
-        cdFilter.disabled = isSku;
-        if (isSku) cdFilter.value = '';
-        applyFilters();
-    });
-});
-
 // Retorna a base ativa conforme a visão selecionada
 function baseAtual() {
     return currentView === 'sku' ? skuProducts : originalProducts;
@@ -195,26 +288,21 @@ document.querySelectorAll('.kpi-clickable').forEach(card => {
         if (!dashboardData) return;
         const kpi = card.getAttribute('data-kpi');
         if (kpi === 'compra') {
-            // Necessidade de compra (< 60 dias): leva à aba de Sugestões de Compra,
-            // mantendo o CD e a Curva selecionados na Visão Geral.
-            const recCd = document.getElementById('recCdFilter');
-            const recCurva = document.getElementById('recCurvaFilter');
+            // Necessidade de compra (< 60 dias): leva à aba Sugestões. O filtro de CD/Curva
+            // já é global, então as Sugestões herdam automaticamente o que está selecionado.
             const recF = document.getElementById('recFilter');
-            if (recCd) recCd.value = cdFilter.value || '';
-            if (recCurva) recCurva.value = curvaFilter.value || '';
-            if (recF) recF.value = 'deficit'; // necessidade de compra (< 60 dias)
+            if (recF) recF.value = 'deficit';
             updateRecommendations();
             ativarAba('recommendations');
         } else {
-            // Vai para a aba Produtos com o filtro de status apropriado.
-            // O CD e a Curva da Visão Geral são preservados pelo applyFilters.
-            if (kpi === 'excesso') statusFilter.value = 'excesso';       // atenção 60-100
-            else if (kpi === 'sem-giro') statusFilter.value = 'sem-giro'; // problema > 100
-            else statusFilter.value = ''; // total = todos
+            // Vai para a aba Produtos marcando o status no filtro global.
+            filtroStatus.clear();
+            if (kpi === 'excesso') filtroStatus.add('excesso');       // atenção 60-100
+            else if (kpi === 'sem-giro') filtroStatus.add('sem-giro'); // problema > 100
             // garante ordenação útil
             if (kpi === 'excesso' || kpi === 'sem-giro') sortBy.value = 'dias-desc';
             else if (kpi === 'total') sortBy.value = 'estoque-desc';
-            applyFilters();
+            aplicarTudo();
             ativarAba('products');
         }
     });
@@ -305,8 +393,6 @@ function carregarPlanilha(buffer, nomeArquivo) {
     skuProducts = agregarPorSKU(processedData.products, processedData.diasCorridos);
     allProducts = processedData.products.slice();
     currentView = 'cd';
-    document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-view') === 'cd'));
-    cdFilter.disabled = false;
     document.getElementById('fileName').textContent = nomeArquivo;
     document.getElementById('dataDate').textContent = processedData.dataReferencia;
     clearBtn.style.display = 'inline-block';
@@ -710,10 +796,12 @@ function clearDashboard() {
     originalProducts = [];
     skuProducts = [];
     currentView = 'cd';
-    document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-view') === 'cd'));
-    cdFilter.disabled = false;
-    const vh = document.getElementById('viewHint');
-    if (vh) vh.textContent = '';
+    filtroCD.clear();
+    filtroCurva.clear();
+    filtroStatus.clear();
+    msMontaOpcoes('cd', []);
+    msSincroniza('curva');
+    msSincroniza('status');
     fileInput.value = '';
     fileName.textContent = 'Selecionar Planilha Excel';
     clearBtn.style.display = 'none';
@@ -737,16 +825,12 @@ function clearDashboard() {
         if (el) el.textContent = '--';
     });
 
-    cdFilter.innerHTML = '<option value="">Todos os CDs</option>';
-    productCdFilter.innerHTML = '<option value="">Todos os CDs</option>';
-    const recCd = document.getElementById('recCdFilter');
-    if (recCd) recCd.innerHTML = '<option value="">Todos os CDs (visão geral)</option>';
-    const recCurva = document.getElementById('recCurvaFilter');
-    if (recCurva) recCurva.value = '';
-    curvaFilter.value = '';
-    statusFilter.value = '';
+    filtroCD.clear();
+    filtroCurva.clear();
+    filtroStatus.clear();
+    ['cd', 'prodCd', 'recCd'].forEach(q => msMontaOpcoes(q, []));
+    msSincroniza('curva'); msSincroniza('recCurva'); msSincroniza('status');
     productSearch.value = '';
-    productCdFilter.value = '';
     // Detalhes
     detailCDs.clear();
     detailProducts.clear();
@@ -772,23 +856,11 @@ function populateFilters() {
     if (!dashboardData) return;
     const cds = [...new Set(dashboardData.products.map(p => p.cd))].sort();
 
-    cdFilter.innerHTML = '<option value="">Todos os CDs</option>';
-    productCdFilter.innerHTML = '<option value="">Todos os CDs</option>';
-    document.getElementById('recCdFilter').innerHTML = '<option value="">Todos os CDs (visão geral)</option>';
-
-    cds.forEach(cd => {
-        const o1 = document.createElement('option');
-        o1.value = cd; o1.textContent = cd;
-        cdFilter.appendChild(o1);
-
-        const o1b = document.createElement('option');
-        o1b.value = cd; o1b.textContent = cd;
-        productCdFilter.appendChild(o1b);
-
-        const o3 = document.createElement('option');
-        o3.value = cd; o3.textContent = cd;
-        document.getElementById('recCdFilter').appendChild(o3);
-    });
+    // CD global em multi-seleção, espelhado em Visão Geral, Produtos e Sugestões.
+    // Descarta seleções de CDs que sumiram na nova base.
+    [...filtroCD].forEach(v => { if (!cds.includes(v)) filtroCD.delete(v); });
+    const opcoesCd = cds.map(cd => ({ value: cd, label: cd }));
+    ['cd', 'prodCd', 'recCd'].forEach(q => msMontaOpcoes(q, opcoesCd));
 
     // Detalhes: monta as opções de CD e Produto (multi-seleção)
     detailCDs.clear();
@@ -803,18 +875,13 @@ function populateFilters() {
 function applyFilters() {
     if (!dashboardData) return;
 
-    const cd = cdFilter.value;
-    const productCd = productCdFilter.value;
-    const curva = curvaFilter.value;
-    const status = statusFilter.value;
     const search = productSearch.value.toLowerCase();
     const sort = sortBy.value || 'dias-asc';
 
     let filtered = baseAtual().filter(p => {
-        if (cd && currentView === 'cd' && p.cd !== cd) return false;
-        if (productCd && p.cd !== productCd) return false;
-        if (curva && p.curva !== curva) return false;
-        if (status && p.status !== status) return false;
+        if (currentView === 'cd' && filtroCD.size && !filtroCD.has(p.cd)) return false;
+        if (filtroCurva.size && !filtroCurva.has(p.curva)) return false;
+        if (filtroStatus.size && !filtroStatus.has(p.status)) return false;
         if (search && !p.material.toLowerCase().includes(search) &&
             !p.fornecedor.toLowerCase().includes(search) &&
             !String(p.codigoSAP).includes(search)) return false;
@@ -844,10 +911,9 @@ function updateActiveFilters() {
     const chips = [];
     const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Necessidade de compra (45-60)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)' };
 
-    if (cdFilter.value) chips.push({ k: 'cd', txt: 'CD: ' + cdFilter.value });
-    if (productCdFilter.value) chips.push({ k: 'productCd', txt: 'CD: ' + productCdFilter.value });
-    if (curvaFilter.value) chips.push({ k: 'curva', txt: 'Curva ' + curvaFilter.value });
-    if (statusFilter.value) chips.push({ k: 'status', txt: statusLabels[statusFilter.value] || statusFilter.value });
+    filtroCD.forEach(v => chips.push({ k: 'cd', v, txt: 'CD: ' + v }));
+    filtroCurva.forEach(v => chips.push({ k: 'curva', v, txt: 'Curva ' + v }));
+    filtroStatus.forEach(v => chips.push({ k: 'status', v, txt: statusLabels[v] || v }));
     if (productSearch.value) chips.push({ k: 'search', txt: 'Busca: "' + productSearch.value + '"' });
 
     if (chips.length === 0) {
@@ -858,23 +924,24 @@ function updateActiveFilters() {
 
     bar.style.display = 'flex';
     bar.innerHTML = '<span class="af-label">Filtros ativos:</span>' +
-        chips.map(c => `<span class="af-chip">${c.txt} <span class="af-x" data-clear="${c.k}">✕</span></span>`).join('') +
+        chips.map(c => `<span class="af-chip">${escapeHtml(c.txt)} <span class="af-x" data-clear="${c.k}" data-val="${escapeHtml(c.v || '')}">✕</span></span>`).join('') +
         '<button class="af-clear-all">Limpar tudo</button>';
 
     bar.querySelectorAll('.af-x').forEach(x => {
         x.addEventListener('click', () => {
             const k = x.getAttribute('data-clear');
-            if (k === 'cd') cdFilter.value = '';
-            else if (k === 'productCd') productCdFilter.value = '';
-            else if (k === 'curva') curvaFilter.value = '';
-            else if (k === 'status') statusFilter.value = '';
+            const val = x.getAttribute('data-val');
+            if (k === 'cd') filtroCD.delete(val);
+            else if (k === 'curva') filtroCurva.delete(val);
+            else if (k === 'status') filtroStatus.delete(val);
             else if (k === 'search') productSearch.value = '';
-            applyFilters();
+            aplicarTudo();
         });
     });
     bar.querySelector('.af-clear-all').addEventListener('click', () => {
-        cdFilter.value = ''; productCdFilter.value = ''; curvaFilter.value = ''; statusFilter.value = ''; productSearch.value = '';
-        applyFilters();
+        filtroCD.clear(); filtroCurva.clear(); filtroStatus.clear();
+        productSearch.value = '';
+        aplicarTudo();
     });
 }
 
@@ -933,7 +1000,7 @@ function updateKPIs() {
 }
 
 function isFilterActive() {
-    return cdFilter.value || curvaFilter.value || statusFilter.value || productSearch.value || productCdFilter.value;
+    return filtroCD.size || filtroCurva.size || filtroStatus.size || productSearch.value;
 }
 
 function updateProductsTable() {
@@ -1100,14 +1167,13 @@ function updateCDAnalysis() {
 function updateRecommendations() {
     if (!dashboardData) return;
     const filter = recFilter.value || 'deficit';
-    const cdSel = document.getElementById('recCdFilter').value;
-    const curvaSel = document.getElementById('recCurvaFilter').value;
     const container = document.getElementById('recommendationsContainer');
 
-    // Sugestão de compra é sempre por ponto de estoque (CD+Material)
+    // Sugestão de compra é sempre por ponto de estoque (CD+Material). Usa o filtro GLOBAL
+    // de CD e Curva (Status não entra aqui — "Focar em" é o eixo de classificação da aba).
     let prods = originalProducts;
-    if (cdSel) prods = prods.filter(p => p.cd === cdSel);
-    if (curvaSel) prods = prods.filter(p => p.curva === curvaSel);
+    if (filtroCD.size) prods = prods.filter(p => filtroCD.has(p.cd));
+    if (filtroCurva.size) prods = prods.filter(p => filtroCurva.has(p.curva));
 
     let lista = [];
     let intro = '';
@@ -1143,7 +1209,8 @@ function updateRecommendations() {
         return;
     }
 
-    const escopo = cdSel ? `CD ${cdSel}` : 'todos os CDs';
+    const escopo = filtroCD.size === 0 ? 'todos os CDs'
+        : (filtroCD.size === 1 ? `CD ${[...filtroCD][0]}` : `${filtroCD.size} CDs`);
     const totalComprar = lista.reduce((s, p) => s + memoriaCompra(p).comprar, 0);
     const totalCaixas = lista.reduce((s, p) => { const m = memoriaCompra(p); return s + (m.temMultiplo ? (m.caixas || 0) : 0); }, 0);
     const semMultiplo = lista.filter(p => !memoriaCompra(p).temMultiplo).length;
@@ -1152,9 +1219,9 @@ function updateRecommendations() {
     const repostoTxt = jaRepostos > 0 ? ` · ${jaRepostos} já com reposição a caminho (fora da lista)` : '';
     const introHtml = `<div class="rec-intro">${intro}<br><strong>${lista.length} itens</strong> a comprar em ${escopo}${filter !== 'performance' ? ` · sugestão total: <span class="rec-total"><strong>${totalComprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}</span>${repostoTxt}${semMultTxt}` : ''}</div>`;
 
-    // Sempre lista compacta (tabela). Em CD específico esconde a coluna CD (redundante).
+    // Sempre lista compacta (tabela). Com 1 CD específico, esconde a coluna CD (redundante).
     recListaAtual = aplicarOrdenacaoRec(lista).slice(0, 300);
-    container.innerHTML = introHtml + renderRecTable(recListaAtual, filter, !!cdSel);
+    container.innerHTML = introHtml + renderRecTable(recListaAtual, filter, filtroCD.size === 1);
 }
 
 // Lista de pontos atualmente exibida na aba Sugestões (para edição de meta por linha)
@@ -1423,8 +1490,8 @@ function buildDetailProductOptions(filtro) {
     if (!dashboardData) { opts.innerHTML = ''; return; }
     const termo = (filtro || '').toLowerCase().trim();
 
-    // SKUs disponíveis nos CDs selecionados (ou todos). Um item por SKU.
-    const base = originalProducts.filter(p => detailCDs.size === 0 || detailCDs.has(p.cd));
+    // SKUs disponíveis: respeita o filtro GLOBAL (CD/Curva/Status) e os CDs do próprio Detalhes
+    const base = originalProducts.filter(p => dentroDoFiltroGlobal(p) && (detailCDs.size === 0 || detailCDs.has(p.cd)));
     const porSku = {};
     base.forEach(p => { if (!porSku[p.sku]) porSku[p.sku] = p; });
     let skus = Object.values(porSku);
@@ -1549,9 +1616,9 @@ function renderDetailBlocks() {
         return;
     }
 
-    // Pontos correspondentes (CD+SKU) que batem com a seleção
+    // Pontos correspondentes (CD+SKU) que batem com a seleção e com o filtro global
     const pontos = originalProducts.filter(p =>
-        detailProducts.has(p.sku) && (detailCDs.size === 0 || detailCDs.has(p.cd))
+        detailProducts.has(p.sku) && dentroDoFiltroGlobal(p) && (detailCDs.size === 0 || detailCDs.has(p.cd))
     ).sort((a, b) => a.material.localeCompare(b.material) || a.cd.localeCompare(b.cd));
 
     if (pontos.length === 0) {
