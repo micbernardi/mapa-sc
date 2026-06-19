@@ -1267,3 +1267,182 @@ canvas {
     font-size: 1rem;
     margin-bottom: 1rem;
 }
+
+/* ===== Aba Ritmo Entrada × Saída ===== */
+.ritmo-kpis { margin-bottom: 0.5rem; }
+.ritmo-kpi-grid { margin-bottom: 1.5rem; }
+
+.ritmo-badge {
+    display: inline-block;
+    padding: 0.28rem 0.6rem;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+.ritmo-badge.acima { background: rgba(220, 38, 38, 0.1); color: var(--deficit); }
+.ritmo-badge.ritmo { background: rgba(22, 163, 74, 0.1); color: var(--saudavel); }
+.ritmo-badge.abaixo { background: rgba(234, 88, 12, 0.1); color: var(--excesso); }
+.ritmo-badge.sem-giro { background: rgba(100, 116, 139, 0.12); color: #475569; }
+
+.ritmo-tend {
+    display: inline-block;
+    font-weight: 600;
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+.ritmo-tend.acelerando { color: var(--deficit); }
+.ritmo-tend.desacelerando { color: var(--excesso); }
+.ritmo-tend.estavel { color: var(--text-secondary); }
+.ritmo-tend.baixo { color: var(--text-tertiary); }
+
+.ritmo-memoria .rit-mem-linha {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.4rem;
+    line-height: 1.5;
+}
+.ritmo-memoria .rit-mem-rot {
+    display: inline-block;
+    min-width: 84px;
+    font-weight: 700;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.03em;
+    margin-right: 6px;
+}
+.ritmo-memoria .rit-mem-veredito {
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    margin: 0.6rem 0;
+    padding: 0.6rem 0.8rem;
+    background: var(--bg-subtle);
+    border-radius: var(--radius-sm);
+    line-height: 1.5;
+}
+
+/* ===== Ritmo: barra de balanço da carteira ===== */
+.ritmo-portfolio { margin-bottom: 1.25rem; }
+.ritmo-portfolio-top { font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 7px; }
+.ritmo-portfolio-bar {
+    display: flex;
+    height: 34px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    box-shadow: var(--shadow-xs);
+}
+.ritmo-portfolio-seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 0.74rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    min-width: 0;
+}
+.ritmo-portfolio-leg { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; font-size: 0.8rem; color: var(--text-secondary); }
+.ritmo-pleg { display: inline-flex; align-items: center; gap: 6px; }
+.ritmo-pleg-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: 0 0 auto; }
+.ritmo-portfolio-cap { font-size: 0.8rem; color: var(--text-secondary); margin-top: 8px; }
+
+/* ===== Ritmo: legenda ===== */
+.ritmo-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin: 0 0 12px;
+}
+.ritmo-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.ritmo-leg-sw { width: 16px; height: 10px; border-radius: 2px; display: inline-block; }
+.ritmo-leg-hatch { background-image: repeating-linear-gradient(45deg, var(--text-tertiary) 0 1.5px, transparent 1.5px 6px); border: 0.5px solid var(--border-strong); }
+.ritmo-leg-band { background: rgba(22, 163, 74, 0.13); border: 0.5px solid rgba(22, 163, 74, 0.55); }
+.ritmo-leg-rec { position: relative; background: var(--bg-subtle); border: 0.5px solid var(--border-strong); }
+.ritmo-leg-rec::after { content: ''; position: absolute; left: 50%; top: 1px; bottom: 1px; width: 2px; background: var(--text-primary); transform: translateX(-1px); border-radius: 1px; }
+.ritmo-leg-hint { margin-left: auto; color: var(--text-tertiary); font-style: italic; }
+
+/* ===== Ritmo: lista de barras ===== */
+.ritmo-list { display: flex; flex-direction: column; gap: 8px; }
+.ritmo-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--bg-card);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+}
+.ritmo-bar-row:hover { background: var(--bg-subtle); border-color: var(--border-strong); }
+.ritmo-nome { flex: 0 0 176px; min-width: 0; }
+.ritmo-nome-t { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ritmo-nome-s { font-size: 0.74rem; color: var(--text-secondary); margin-top: 3px; }
+.ritmo-track {
+    flex: 1 1 auto;
+    position: relative;
+    height: 24px;
+    background: var(--bg-subtle);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+.ritmo-band { position: absolute; top: 0; bottom: 0; background: rgba(22, 163, 74, 0.13); }
+.ritmo-fill { position: absolute; left: 0; top: 0; bottom: 0; }
+/* a caminho = trilho fino no rodapé, cinza neutro (secundário ao estoque real) */
+.ritmo-fill-hatch { position: absolute; bottom: 0; height: 6px; background-image: repeating-linear-gradient(45deg, var(--text-tertiary) 0 1.5px, transparent 1.5px 6px); border-left: 1px solid var(--text-tertiary); }
+/* limites da faixa-alvo (45 e 100) em verde, para o alvo ler mesmo por cima da hachura */
+.ritmo-mark { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(22, 163, 74, 0.55); }
+.ritmo-mark-rec { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text-primary); box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.65); border-radius: 1px; }
+.ritmo-mark-rec::before { content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid var(--text-primary); }
+.ritmo-val { flex: 0 0 104px; text-align: right; }
+.ritmo-val-num { font-size: 0.95rem; font-weight: 700; }
+.ritmo-val-sub { font-size: 0.74rem; color: var(--text-secondary); margin-top: 3px; }
+.ritmo-exp { flex: 0 0 auto; color: var(--text-tertiary); font-size: 0.8rem; }
+.ritmo-detalhe { padding: 2px 4px 6px; }
+
+/* ===== Ritmo: linha de leitura direta ===== */
+.ritmo-dica { font-size: 0.78rem; color: var(--text-tertiary); font-style: italic; margin: 0 2px 10px; }
+.ritmo-srow {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--bg-card);
+    border: 0.5px solid var(--border);
+    border-left: 3px solid var(--text-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 11px 16px;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+}
+.ritmo-srow:hover { background: var(--bg-subtle); }
+.ritmo-sid { flex: 1 1 auto; min-width: 0; }
+.ritmo-sname { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ritmo-smeta { font-size: 0.76rem; color: var(--text-secondary); margin-top: 3px; }
+.ritmo-snums { font-size: 0.76rem; color: var(--text-tertiary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ritmo-sverd { flex: 0 0 172px; text-align: right; }
+.ritmo-sbig { font-size: 1.4rem; font-weight: 700; line-height: 1.05; }
+.ritmo-sverd-l { font-size: 0.74rem; font-weight: 500; margin-top: 3px; line-height: 1.25; }
+.ritmo-compra { flex: 0 0 132px; text-align: right; padding-left: 14px; border-left: 0.5px solid var(--border); }
+.ritmo-compra-n { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); line-height: 1.05; }
+.ritmo-compra.zero .ritmo-compra-n { color: var(--text-tertiary); font-weight: 600; }
+.ritmo-compra-l { font-size: 0.7rem; color: var(--text-secondary); margin-top: 3px; line-height: 1.2; }
+
+@media (max-width: 640px) {
+    .ritmo-nome { flex-basis: 120px; }
+    .ritmo-val { flex-basis: 84px; }
+    .ritmo-legend { font-size: 0.72rem; gap: 10px; }
+    .ritmo-leg-hint { margin-left: 0; flex-basis: 100%; }
+    .ritmo-srow { gap: 10px; padding: 10px 12px; }
+    .ritmo-sverd { flex-basis: 104px; }
+    .ritmo-sbig { font-size: 1.15rem; }
+    .ritmo-compra { flex-basis: 84px; padding-left: 8px; }
+    .ritmo-compra-n { font-size: 1rem; }
+}

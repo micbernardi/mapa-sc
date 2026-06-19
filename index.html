@@ -34,6 +34,7 @@
                 <button class="tab-btn active" data-tab="overview">📈 Visão Geral</button>
                 <button class="tab-btn" data-tab="products">📦 Produtos</button>
                 <button class="tab-btn" data-tab="recommendations" title="Quanto comprar para cada produto atingir 60 dias de cobertura de estoque (meta padrão, ajustável por linha)">💡 Sugestões de Compra (60 dias)</button>
+                <button class="tab-btn" data-tab="ritmo" title="Entrada (estoque livre + reposição a caminho) versus saída (demanda que vocês geram). Diz se a demanda está acima, no ritmo ou abaixo do estoque.">⚖️ Ritmo Entrada × Saída</button>
                 <button class="tab-btn" data-tab="details">🔍 Detalhes</button>
                 <button class="tab-btn" data-tab="cd-sales" title="Histórico de saída (vendas) mês a mês, somando todos os produtos">🏭 Vendas do CD</button>
             </div>
@@ -195,6 +196,60 @@
 
                 <div class="recommendations-container" id="recommendationsContainer">
                     <div class="empty-state">Carregue uma planilha para gerar sugestões de compra</div>
+                </div>
+            </section>
+
+            <!-- TAB: RITMO ENTRADA × SAÍDA -->
+            <section class="tab-content" id="ritmo">
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label>Visão:</label>
+                        <select id="ritmoViewSel" class="filter-select">
+                            <option value="cd">Por CD</option>
+                            <option value="sc" selected>Santa Cruz (todos os CDs)</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Selecionar CD:</label>
+                        <div class="multiselect" id="msRitmoCd">
+                            <button type="button" class="ms-toggle" id="msRitmoCdToggle">Todos os CDs <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msRitmoCdDrop">
+                                <div class="ms-options" id="msRitmoCdOpts"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="filter-group">
+                        <label>Focar em:</label>
+                        <select id="ritmoFilter" class="filter-select">
+                            <option value="acima">Demanda reprimida (venda &gt; estoque)</option>
+                            <option value="abaixo">Estoque sobrando</option>
+                            <option value="ritmo">No ritmo</option>
+                            <option value="tudo">Tudo</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Ordenar por:</label>
+                        <select id="ritmoSort" class="filter-select">
+                            <option value="auto">Recomendada</option>
+                            <option value="reprimido">Mais reprimido (× maior)</option>
+                            <option value="compra">Maior sugestão de compra</option>
+                            <option value="nome">Nome (A → Z)</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Curva:</label>
+                        <div class="multiselect" id="msRitmoCurva">
+                            <button type="button" class="ms-toggle" id="msRitmoCurvaToggle">Todas as Curvas <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msRitmoCurvaDrop">
+                                <div class="ms-options" id="msRitmoCurvaOpts"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ritmo-kpis" id="ritmoKpis"></div>
+                <div class="recommendations-container" id="ritmoContainer">
+                    <div class="empty-state">Carregue uma planilha para analisar o ritmo entrada × saída</div>
                 </div>
             </section>
 
