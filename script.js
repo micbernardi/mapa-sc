@@ -13,6 +13,11 @@ const DIAS_ENCALHADO = 100;     // acima disso = encalhado (estoque parado), mes
 const BANDA_TENDENCIA = 0.12;
 const MIN_GIRO_TENDENCIA = 5;
 
+// Aba Detalhes: acima deste nº de produtos, o "Selecionar todos" pede confirmação
+// antes de montar todos os blocos de detalhe (cada produto × CD vira um bloco).
+// É só uma trava de desempenho p/ não congelar a aba — dá p/ prosseguir no aviso.
+const MAX_DETALHE_CONFIRMA = 80;
+
 // Reserva considerada "estoque livre do CD". Só esta reserva entra nos totais de
 // estoque (livre/qualidade/bloqueado/total/R$), nas pendências E nas vendas/giro.
 // As demais (Colaborativa, Loja a Loja, OL Indústria) NÃO são estoque livre
@@ -1878,14 +1883,13 @@ function buildDetailCdOptions(cds) {
     });
 }
 
-// Monta a lista de checkboxes de Produto (SKUs únicos), filtrada pela busca
-// e limitada aos CDs selecionados (se houver).
-function buildDetailProductOptions(filtro) {
-    const opts = document.getElementById('msProdOptions');
-    if (!dashboardData) { opts.innerHTML = ''; return; }
+// Retorna os SKUs únicos disponíveis na aba Detalhes para um termo de busca,
+// já filtrados (filtro GLOBAL + CDs do Detalhes) e ordenados. É a MESMA base
+// usada para montar a lista E para o "Selecionar todos", então os dois andam
+// sempre em sincronia (o botão seleciona exatamente o que o filtro mostra).
+function skusDisponiveisDetalhe(filtro) {
+    if (!dashboardData) return [];
     const termo = (filtro || '').toLowerCase().trim();
-
-    // SKUs disponíveis: respeita o filtro GLOBAL (CD/Curva/Status) e os CDs do próprio Detalhes
     const base = originalProducts.filter(p => dentroDoFiltroGlobal(p) && (detailCDs.size === 0 || detailCDs.has(p.cd)));
     const porSku = {};
     base.forEach(p => { if (!porSku[p.sku]) porSku[p.sku] = p; });
@@ -1898,6 +1902,15 @@ function buildDetailProductOptions(filtro) {
         );
     }
     skus.sort((a, b) => a.material.localeCompare(b.material) || String(a.codigoSAP).localeCompare(String(b.codigoSAP)));
+    return skus;
+}
+
+// Monta a lista de checkboxes de Produto (SKUs únicos), filtrada pela busca
+// e limitada aos CDs selecionados (se houver).
+function buildDetailProductOptions(filtro) {
+    const opts = document.getElementById('msProdOptions');
+    if (!dashboardData) { opts.innerHTML = ''; return; }
+    const skus = skusDisponiveisDetalhe(filtro);
 
     const limite = 300;
     const lista = skus.slice(0, limite);
@@ -1909,6 +1922,11 @@ function buildDetailProductOptions(filtro) {
     if (skus.length > limite) {
         opts.innerHTML += `<div class="ms-empty">Mostrando ${limite} de ${skus.length}. Refine a busca.</div>`;
     }
+
+    // Reflete no botão quantos produtos o "Selecionar todos" vai marcar agora
+    // (respeita a busca e os CDs do Detalhes; inclui os que passam do limite acima).
+    const btnAll = document.getElementById('msProdSelectAll');
+    if (btnAll) btnAll.textContent = skus.length ? `Selecionar todos (${skus.length})` : 'Selecionar todos';
 
     opts.querySelectorAll('input[data-msprod]').forEach(chk => {
         chk.addEventListener('change', () => {
@@ -2268,6 +2286,37 @@ function setupDetailMultiselects() {
     prodSearch.addEventListener('click', (e) => e.stopPropagation());
     cdDropdown.addEventListener('click', (e) => e.stopPropagation());
     prodDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+    // "Selecionar todos" / "Limpar" da lista de produtos (aba Detalhes).
+    const prodSelectAll = document.getElementById('msProdSelectAll');
+    const prodClearAll = document.getElementById('msProdClearAll');
+
+    if (prodSelectAll) prodSelectAll.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const skus = skusDisponiveisDetalhe(prodSearch.value);
+        if (!skus.length) return;
+        // Cada produto vira um (ou mais) bloco de detalhe — um nº muito grande pode
+        // deixar a aba pesada. Acima do limite, confirma antes (mas deixa seguir).
+        if (skus.length > MAX_DETALHE_CONFIRMA &&
+            !confirm(`Selecionar ${skus.length} produtos? Carregar todos os detalhes de uma vez pode deixar a aba lenta.`)) {
+            return;
+        }
+        skus.forEach(p => detailProducts.add(p.sku));
+        buildDetailProductOptions(prodSearch.value);
+        renderDetailChips();
+        updateDetailLabels();
+        renderDetailBlocks();
+    });
+
+    if (prodClearAll) prodClearAll.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!detailProducts.size) return;
+        detailProducts.clear();
+        document.querySelectorAll('#msProdOptions input[data-msprod]:checked').forEach(c => { c.checked = false; });
+        renderDetailChips();
+        updateDetailLabels();
+        renderDetailBlocks();
+    });
 
     // Fecha dropdowns ao clicar fora
     document.addEventListener('click', () => {
