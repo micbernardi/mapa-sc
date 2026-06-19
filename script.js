@@ -135,6 +135,7 @@ const ritmoFilter = document.getElementById('ritmoFilter');
 const ritmoViewSel = document.getElementById('ritmoViewSel');
 const ritmoSort = document.getElementById('ritmoSort');
 let ritmoView = 'sc';   // padrão: Santa Cruz (soma de todos os CDs). 'cd' = por CD
+let ritmoScExplicito = false;   // true = SC escolhido de propósito; aí a visão ignora o filtro de CD
 
 // EVENT LISTENERS
 fileInput.addEventListener('change', handleFileUpload);
@@ -145,7 +146,11 @@ productSearch.addEventListener('input', applyFilters);
 sortBy.addEventListener('change', applyFilters);
 recFilter.addEventListener('change', updateRecommendations);
 if (ritmoFilter) ritmoFilter.addEventListener('change', updateRitmo);
-if (ritmoViewSel) ritmoViewSel.addEventListener('change', () => { ritmoView = ritmoViewSel.value; updateRitmo(); });
+if (ritmoViewSel) ritmoViewSel.addEventListener('change', () => {
+    ritmoView = ritmoViewSel.value;
+    ritmoScExplicito = (ritmoView === 'sc');   // escolha explícita de SC passa a ignorar o filtro de CD
+    updateRitmo();
+});
 if (ritmoSort) ritmoSort.addEventListener('change', updateRitmo);
 const cdSalesSelectEl = document.getElementById('cdSalesSelect');
 if (cdSalesSelectEl) cdSalesSelectEl.addEventListener('change', renderVendasCDDetalhe);
@@ -162,7 +167,7 @@ const MS_FILTROS = {
     cd:       { set: filtroCD,     toggle: 'msCdToggle',       drop: 'msCdDrop',       opts: 'msCdOpts',       vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
     prodCd:   { set: filtroCD,     toggle: 'msProdCdToggle',   drop: 'msProdCdDrop',   opts: 'msProdCdOpts',   vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
     recCd:    { set: filtroCD,     toggle: 'msRecCdToggle',    drop: 'msRecCdDrop',    opts: 'msRecCdOpts',    vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
-    ritmoCd:  { set: filtroCD,     toggle: 'msRitmoCdToggle',  drop: 'msRitmoCdDrop',  opts: 'msRitmoCdOpts',  vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
+    ritmoCd:  { set: filtroCD,     toggle: 'msRitmoCdToggle',  drop: 'msRitmoCdDrop',  opts: 'msRitmoCdOpts',  vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: ritmoCdChange },
     curva:    { set: filtroCurva,  toggle: 'msCurvaToggle',    drop: 'msCurvaDrop',    opts: 'msCurvaOpts',    vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v,            plural: n => n + ' curvas', onChange: aplicarTudo },
     recCurva: { set: filtroCurva,  toggle: 'msRecCurvaToggle', drop: 'msRecCurvaDrop', opts: 'msRecCurvaOpts', vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v,            plural: n => n + ' curvas', onChange: aplicarTudo },
     ritmoCurva: { set: filtroCurva, toggle: 'msRitmoCurvaToggle', drop: 'msRitmoCurvaDrop', opts: 'msRitmoCurvaOpts', vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v,         plural: n => n + ' curvas', onChange: aplicarTudo },
@@ -179,6 +184,13 @@ function aplicarTudo() {
     atualizarDetalhes();     // Detalhes
     renderVendasCD();        // Vendas do CD
     updateRitmo();           // Ritmo Entrada × Saída
+}
+
+// Marcar um CD específico no seletor do Ritmo descarta a intenção de "ver SC":
+// o switch automático para "Por CD" volta a valer (a guarda no updateRitmo cuida disso).
+function ritmoCdChange() {
+    if (filtroCD.size) ritmoScExplicito = false;
+    aplicarTudo();
 }
 function atualizarDetalhes() {
     if (!dashboardData) return;
@@ -1584,6 +1596,11 @@ function updateRitmo() {
     if (!container) return;
     const kpisEl = document.getElementById('ritmoKpis');
     const foco = (ritmoFilter && ritmoFilter.value) || 'acima';
+    // Um CD específico selecionado ⇒ cai para "Por CD", a menos que SC tenha sido escolhido de propósito.
+    if (ritmoView === 'sc' && filtroCD.size && !ritmoScExplicito) {
+        ritmoView = 'cd';
+        if (ritmoViewSel) ritmoViewSel.value = 'cd';
+    }
     const sc = ritmoView === 'sc';   // Santa Cruz: soma de todos os CDs por SKU
 
     // Base: por CD (CD+produto) ou Santa Cruz (skuProducts, já somado entre CDs).
@@ -1626,7 +1643,7 @@ function updateRitmo() {
     }
 
     const noun = sc ? 'SKUs' : 'itens';
-    const escopo = sc ? 'Santa Cruz (todos os CDs)'
+    const escopo = sc ? ('Santa Cruz (todos os CDs)' + (filtroCD.size ? ' · filtro de CD não se aplica aqui' : ''))
         : (filtroCD.size === 0 ? 'todos os CDs' : (filtroCD.size === 1 ? `CD ${[...filtroCD][0]}` : `${filtroCD.size} CDs`));
     const introMap = {
         acima: `<strong>Demanda reprimida</strong>: a venda supera o estoque livre, cobertura abaixo de ${DIAS_MIN_SAUDAVEL} dias. Risco de ruptura, prioridade de compra. A sugestão repõe até ${RITMO_META_DIAS} dias de cobertura, já descontando o que vem a caminho. Os mais reprimidos primeiro.`,
