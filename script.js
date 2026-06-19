@@ -1753,61 +1753,77 @@ function renderRitmoTable(lista, hideCD, sc) {
     return `<div class="ritmo-dica">${dica}</div><div class="ritmo-list">${rows}</div>`;
 }
 
-// Memória do ritmo: o racional inteiro do ponto, em texto.
+// Memória do ritmo — compacta: o gap de cobertura lado a lado, o veredito em 1
+// linha, a conta de compra inteira e onde o SKU vende. Sem repetir o que a linha
+// já mostra (venda média, estoque livre e a caminho ficam no cabeçalho).
 function explicacaoRitmo(p, r) {
     const fmt = n => isFinite(n) ? Math.round(n).toLocaleString('pt-BR') : '∞';
-    const dirTxt = (r.tendencia === 'baixo' || r.varTend == null)
-        ? 'giro baixo para ler a direção'
-        : r.tendencia === 'acelerando' ? 'demanda acelerando, a cobertura tende a encolher'
-        : r.tendencia === 'desacelerando' ? 'demanda desacelerando, a cobertura tende a esticar'
-        : 'demanda estável';
-    const entradaTxt = r.aCaminho > 0
-        ? `${r.aCaminho.toLocaleString('pt-BR')} un a caminho (trânsito + entrega), elevando a cobertura para ${fmt(r.cobCaminho)} dias`
-        : 'nada a caminho';
-    const semEntrada = r.diasSemEntrada != null ? `${r.diasSemEntrada} dias desde a última entrada` : 'sem data de última entrada';
+    const cor = RITMO_COR[r.veredito] || 'var(--text-secondary)';
+    const dir = (r.tendencia === 'baixo' || r.varTend == null) ? null
+        : r.tendencia === 'acelerando' ? 'Acelerando'
+        : r.tendencia === 'desacelerando' ? 'Desacelerando'
+        : 'Estável';
 
-    let veredito;
-    if (r.estrutura === 'ruptura')
-        veredito = `<strong>Demanda acima do estoque (ruptura)</strong>: vende ${p.vendaMedia.toLocaleString('pt-BR')} un/mês, estoque livre zerado e nada a caminho. A saída superou totalmente a entrada.`;
-    else if (r.estrutura === 'em-fluxo' && r.veredito === 'acima')
-        veredito = `<strong>Demanda acima do estoque</strong>: estoque livre zerado e mesmo o que vem a caminho cobre só ${fmt(r.cobCaminho)} dias (abaixo de ${DIAS_MIN_SAUDAVEL}). A reposição não acompanha o giro.`;
-    else if (r.estrutura === 'em-fluxo')
-        veredito = `<strong>No ritmo (em reposição)</strong>: estoque livre zerado, mas o que vem a caminho recompõe ${fmt(r.cobCaminho)} dias de cobertura. A entrada a caminho acompanha a saída.`;
-    else if (r.veredito === 'acima')
-        veredito = `<strong>Demanda acima do estoque</strong>: cobertura de ${fmt(r.cobAtual)} dias, abaixo dos ${DIAS_MIN_SAUDAVEL}. Puxando mais rápido do que o estoque sustenta.`;
-    else if (r.veredito === 'abaixo')
-        veredito = `<strong>Demanda abaixo do estoque</strong>: cobertura de ${fmt(r.cobAtual)} dias, acima de ${DIAS_ENCALHADO}. Estoque sobrando para o giro atual.`;
-    else
-        veredito = `<strong>No ritmo</strong>: cobertura de ${fmt(r.cobAtual)} dias, dentro da faixa ${DIAS_MIN_SAUDAVEL}-${DIAS_ENCALHADO}. Entrada e saída equilibradas.`;
+    // 1) Coberturas lado a lado: o gap entre elas é o sinal do ritmo.
+    const cob = [];
+    cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n" style="color:${cor};">${fmt(r.cobAtual)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">livre hoje</div></div>`);
+    if (r.aCaminho > 0)
+        cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n">${fmt(r.cobCaminho)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">com o que vem</div></div>`);
+    if (isFinite(r.cobRecente) && r.sRec > 0 && Math.abs(r.cobRecente - r.cobAtual) >= 1)
+        cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n">${fmt(r.cobRecente)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l" title="se o ritmo recente de ${fmt(r.sRec)} un/mês seguir">ritmo recente</div></div>`);
+    if (r.diasSemEntrada != null)
+        cob.push(`<div class="rit-cob-cell rit-cob-ctx"><div class="rit-cob-n">${r.diasSemEntrada}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">desde a entrada</div></div>`);
+    const cobHtml = `<div class="rit-cob">${cob.join('')}</div>`;
 
-    const noRitmoRecente = (isFinite(r.cobRecente) && r.sRec > 0)
-        ? `Se o ritmo recente de venda (${fmt(r.sRec)} un/mês) seguir, o estoque livre atual cobre ${fmt(r.cobRecente)} dias.`
-        : '';
+    // 2) Veredito em uma linha: palavra-chave colorida + leitura curta.
+    let kw, txt;
+    if (r.estrutura === 'ruptura') {
+        kw = 'Ruptura'; txt = `livre zerado e nada a caminho; vende ${fmt(p.vendaMedia)}/mês.`;
+    } else if (r.estrutura === 'em-fluxo' && r.veredito === 'acima') {
+        kw = 'Livre zerado'; txt = `o que vem a caminho cobre só ${fmt(r.cobCaminho)} d (abaixo de ${DIAS_MIN_SAUDAVEL}). A reposição não acompanha.`;
+    } else if (r.estrutura === 'em-fluxo') {
+        kw = 'Em reposição'; txt = `livre zerado, mas o caminho recompõe ${fmt(r.cobCaminho)} d de cobertura.`;
+    } else if (r.veredito === 'acima') {
+        kw = dir || 'Reprimida'; txt = `a saída supera o estoque livre; cobertura abaixo de ${DIAS_MIN_SAUDAVEL} d.`;
+    } else if (r.veredito === 'abaixo') {
+        kw = dir || 'Sobrando'; txt = `estoque sobrando para o giro; cobertura acima de ${DIAS_ENCALHADO} d.`;
+    } else if (r.veredito === 'sem-giro') {
+        kw = 'Sem giro'; txt = `sem venda na janela; cobertura indefinida.`;
+    } else {
+        kw = dir || 'No ritmo'; txt = `entrada e saída equilibradas; cobertura na faixa ${DIAS_MIN_SAUDAVEL}–${DIAS_ENCALHADO} d.`;
+    }
+    const verdHtml = `<div class="rit-verd" style="border-left-color:${cor};"><b style="color:${cor};">${kw}</b> · ${txt}</div>`;
 
-    // Sugestão de compra: meta de 45 dias nesta visão, já descontando estoque livre + o que vem a caminho.
+    // 3) Compra: a conta inteira em uma linha (já descontando livre + a caminho).
     const mc = memoriaCompra(p, RITMO_META_DIAS);
-    const compraLinha = mc.comprar > 0
-        ? `para a meta de <strong>${mc.diasMeta} dias</strong> precisa de ${mc.necessario.toLocaleString('pt-BR')} un. Já tem ${mc.disponivelFuturo.toLocaleString('pt-BR')} un (${Math.round(p.estoqueLivre).toLocaleString('pt-BR')} livre + ${mc.aCaminho.toLocaleString('pt-BR')} a caminho). Comprar ${mc.necessario.toLocaleString('pt-BR')} − ${mc.disponivelFuturo.toLocaleString('pt-BR')} = <strong>${mc.comprar.toLocaleString('pt-BR')} un</strong>${mc.pisoMinimo ? ' (piso de 1 caixa)' : ''}.`
-        : `para a meta de <strong>${mc.diasMeta} dias</strong> precisa de ${mc.necessario.toLocaleString('pt-BR')} un, e já tem ${mc.disponivelFuturo.toLocaleString('pt-BR')} un (${Math.round(p.estoqueLivre).toLocaleString('pt-BR')} livre + ${mc.aCaminho.toLocaleString('pt-BR')} a caminho). <strong>Comprar 0</strong>, já coberto.`;
+    const base = `meta ${mc.diasMeta} d → ${fmt(mc.necessario)} un · tem ${fmt(mc.disponivelFuturo)} (${fmt(p.estoqueLivre)}+${fmt(mc.aCaminho)})`;
+    let compraV;
+    if (mc.comprar <= 0) {
+        compraV = `${base} · <strong style="color:var(--saudavel);">0 a comprar</strong>`;
+    } else {
+        const fecho = mc.pisoMinimo ? `<strong class="rit-buy">${fmt(mc.comprar)} un</strong> (piso 1 cx)`
+            : mc.temMultiplo ? `<strong class="rit-buy">${fmt(mc.comprar)} un</strong> (${mc.caixas} cx de ${fmt(mc.multiplo)})`
+                : `<strong class="rit-buy">${fmt(mc.comprar)} un</strong>`;
+        compraV = `${base} · faltam ${fmt(mc.comprarBruto)} → ${fecho}`;
+    }
+    const compraHtml = `<div class="rit-line"><span class="rit-line-rot">Compra</span><span class="rit-line-v">${compraV}</span></div>`;
 
-    // Os 3 CDs que mais vendem este SKU (puxado da base por CD), com estoque livre de cada um.
+    // 4) CDs que mais vendem este SKU (com o livre de cada um).
     const topCDs = originalProducts
         .filter(o => o.sku === p.sku)
         .sort((a, b) => (b.vendaMedia || 0) - (a.vendaMedia || 0))
         .slice(0, 3);
-    const topCDsTxt = topCDs.length
-        ? topCDs.map(c => `${escapeHtml(c.cd)} (${Math.round(c.vendaMedia).toLocaleString('pt-BR')}/mês · ${Math.round(c.estoqueLivre).toLocaleString('pt-BR')} livre)`).join(' · ')
+    const cdsHtml = topCDs.length
+        ? `<div class="rit-line"><span class="rit-line-rot">CDs</span><span class="rit-cds">${topCDs.map(c => `<span class="rit-cd"><b>${escapeHtml(c.cd)}</b> ${Math.round(c.vendaMedia).toLocaleString('pt-BR')}/mês · ${Math.round(c.estoqueLivre).toLocaleString('pt-BR')} livre</span>`).join('')}</span></div>`
         : '';
 
     return `
     <div class="rec-memoria ritmo-memoria">
-        <div class="rit-mem-linha"><span class="rit-mem-rot">Saída</span> venda média ${p.vendaMedia.toLocaleString('pt-BR')} un/mês · ${dirTxt}.</div>
-        <div class="rit-mem-linha"><span class="rit-mem-rot">Entrada</span> estoque livre ${p.estoqueLivre.toFixed(0)} un · ${entradaTxt} · ${semEntrada}.</div>
-        <div class="rit-mem-linha"><span class="rit-mem-rot">Coberturas</span> atual ${fmt(r.cobAtual)} d · com o que vem a caminho ${fmt(r.cobCaminho)} d. ${noRitmoRecente}</div>
-        <div class="rit-mem-linha"><span class="rit-mem-rot">Sugestão de compra</span> ${compraLinha}</div>
-        ${topCDsTxt ? `<div class="rit-mem-linha"><span class="rit-mem-rot">CDs que mais vendem</span> ${topCDsTxt}.</div>` : ''}
-        <div class="rit-mem-veredito">${veredito}</div>
-        <div class="rec-memoria-vendas"><span class="rec-memoria-label">Vendas por mês (un):</span> ${vendasPorMesHtml(p)}</div>
+        ${cobHtml}
+        ${verdHtml}
+        ${compraHtml}
+        ${cdsHtml}
+        <div class="rec-memoria-vendas"><span class="rec-memoria-label">Vendas/mês</span>${vendasPorMesHtml(p)}</div>
     </div>`;
 }
 
