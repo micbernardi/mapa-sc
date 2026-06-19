@@ -595,7 +595,7 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
 
     // Data da última entrada: mantém a mais recente
     const d = String(row['Data Última Entrada'] || '').trim();
-    if (d && d > o.dataUltimaEntrada) o.dataUltimaEntrada = d;
+    if (d && chaveData(d) > chaveData(o.dataUltimaEntrada)) o.dataUltimaEntrada = d;
 
     // Completa metadados que possam ter vindo vazios na 1ª linha
     if (!o.fornecedor) o.fornecedor = String(row['Fornecedor'] || '').trim();
@@ -659,7 +659,7 @@ function agregarPorSKU(products, diasCorridos) {
         ['vendaMedia', 'vendaMediaRS', 'estoqueLivre', 'estoqueQualidade',
             'estoqueBloqueado', 'estoqueTotal', 'estoqueLivreRS',
             'pendenciaTransito', 'pendenciaEntrega'].forEach(k => { o[k] += p[k]; });
-        if (p.dataUltimaEntrada && p.dataUltimaEntrada > o.dataUltimaEntrada) {
+        if (p.dataUltimaEntrada && chaveData(p.dataUltimaEntrada) > chaveData(o.dataUltimaEntrada)) {
             o.dataUltimaEntrada = p.dataUltimaEntrada;
         }
         // guarda CDs em que esse SKU está deficitário (útil pra ação)
@@ -1523,6 +1523,15 @@ function diasDesde(dataStr) {
     const ano = m[3].length <= 2 ? 2000 + (+m[3]) : +m[3];
     const dt = new Date(ano, (+m[2]) - 1, +m[1]);
     return isNaN(dt) ? null : Math.max(0, Math.round((Date.now() - dt.getTime()) / 86400000));
+}
+
+// dd/mm/aaaa (ou -, .) -> aaaammdd numérico, p/ comparar datas de verdade
+// (comparar como texto engana: ordena pelo dia, não pela data). 0 se inválida.
+function chaveData(s) {
+    const m = String(s || '').match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+    if (!m) return 0;
+    const ano = m[3].length <= 2 ? 2000 + (+m[3]) : +m[3];
+    return ano * 10000 + (+m[2]) * 100 + (+m[1]);
 }
 
 // Racional de fluxo de um ponto (CD+produto, reserva Regular já consolidada).
