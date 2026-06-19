@@ -164,6 +164,7 @@ if (cdSalesSelectEl) cdSalesSelectEl.addEventListener('change', renderVendasCDDe
 const MS_STATUS_LABEL = {
     deficit: 'Necessidade de compra (< 45 dias)',
     saudavel: 'Necessidade de compra (45-60 dias)',
+    reposicao: 'Em reposição (coberto pelo que vem)',
     excesso: 'Atenção (60-100 dias)',
     'sem-giro': 'Problema (> 100 dias)'
 };
@@ -278,6 +279,7 @@ function setupFiltrosMulti() {
     msMontaOpcoes('status', [
         { value: 'deficit', label: MS_STATUS_LABEL.deficit },
         { value: 'saudavel', label: MS_STATUS_LABEL.saudavel },
+        { value: 'reposicao', label: MS_STATUS_LABEL.reposicao },
         { value: 'excesso', label: MS_STATUS_LABEL.excesso },
         { value: 'sem-giro', label: MS_STATUS_LABEL['sem-giro'] }
     ]);
@@ -628,6 +630,18 @@ function finalizarProduto(p) {
     p.vendaParcialProjetada = p.diasCorridos > 0 ? (p.vendaParcial / p.diasCorridos) * 30 : p.vendaParcial;
 
     p.status = classificar(p.diasLivre);
+
+    // Reconcilia o status de COMPRA com o que já está a caminho (pendência de
+    // trânsito + entrega = mercadoria comprada que vai entrar no CD). Um item com
+    // cobertura LIVRE baixa (déficit/saudável) mas cuja compra LÍQUIDA — depois de
+    // abater o que vem — é zero não precisa de compra nova: está "em reposição".
+    // Usa a MESMA conta da aba Sugestões (memoriaCompra), sem inventar critério.
+    if (p.status === 'deficit' || p.status === 'saudavel') {
+        const aCaminho = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
+        if (aCaminho > 0 && memoriaCompra(p).comprar === 0) {
+            p.status = 'reposicao';
+        }
+    }
 }
 
 // Agrega os pontos (que estão por CD+SKU) num único registro por SKU,
@@ -790,7 +804,7 @@ function consolidate(products, nomeArquivo, diasCorridos) {
                 estoqueLivreTotal: 0,
                 estoqueLivreRSTotal: 0,
                 vendaMediaTotal: 0,
-                deficit: 0, saudavel: 0, excesso: 0, semGiro: 0
+                deficit: 0, saudavel: 0, reposicao: 0, excesso: 0, semGiro: 0
             };
         }
         const c = cdMap[p.cd];
@@ -800,6 +814,7 @@ function consolidate(products, nomeArquivo, diasCorridos) {
         c.vendaMediaTotal += p.vendaMedia;
         if (p.status === 'deficit') c.deficit++;
         else if (p.status === 'saudavel') c.saudavel++;
+        else if (p.status === 'reposicao') c.reposicao++;
         else if (p.status === 'excesso') c.excesso++;
         else if (p.status === 'sem-giro') c.semGiro++;
     });
@@ -950,7 +965,7 @@ function updateActiveFilters() {
     if (!bar) return;
 
     const chips = [];
-    const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Necessidade de compra (45-60)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)' };
+    const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Necessidade de compra (45-60)', reposicao: 'Em reposição (a caminho)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)' };
 
     filtroCD.forEach(v => chips.push({ k: 'cd', v, txt: 'CD: ' + v }));
     filtroCurva.forEach(v => chips.push({ k: 'curva', v, txt: 'Curva ' + v }));
@@ -1018,11 +1033,14 @@ function updateKPIs() {
     const prods = (allProducts.length > 0 || isFilterActive()) ? allProducts : baseAtual();
 
     // Valores em R$ por faixa de DIAS DE ESTOQUE LIVRE (coluna AM), 100% pela AM:
-    //   necessidade de compra = < 60 dias (status deficit + saudavel)
+    //   necessidade de compra = < 60 dias (status deficit + saudavel + reposicao)
     //   atenção               = 60 a 100 dias (status excesso)
     //   problema              = > 100 dias (status sem-giro)
     const estTotal = prods.reduce((s, p) => s + p.estoqueLivreRS, 0);
-    const estCompra = prods.filter(p => p.status === 'deficit' || p.status === 'saudavel')
+    // Faixa por COBERTURA LIVRE < 60 dias. Inclui "reposicao" (livre baixo, já coberto
+    // pelo que vem): a faixa mede capital por cobertura livre, então eles pertencem aqui.
+    // O que muda é o badge na lista — não há ordem de compra nova para eles.
+    const estCompra = prods.filter(p => p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao')
         .reduce((s, p) => s + p.estoqueLivreRS, 0);
     const estAtencao = prods.filter(p => p.status === 'excesso').reduce((s, p) => s + p.estoqueLivreRS, 0);
     const estProblema = prods.filter(p => p.status === 'sem-giro').reduce((s, p) => s + p.estoqueLivreRS, 0);
@@ -1058,18 +1076,21 @@ function updateProductsTable() {
     }
 
     const limite = 500;
-    tbody.innerHTML = prods.slice(0, limite).map(p => `
+    tbody.innerHTML = prods.slice(0, limite).map(p => {
+        const aCaminho = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
+        return `
         <tr>
             <td><strong>${isSku ? '🌐 ' + p.nCDs + ' CDs' : p.cd}</strong></td>
             <td title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 36)}</td>
-            <td>${truncate(p.fornecedor, 24)}</td>
+            <td>${aCaminho > 0 ? aCaminho.toLocaleString('pt-BR') : '<span style="color:var(--text-secondary);">—</span>'}</td>
             <td><span class="curva-badge curva-${p.curva}">${p.curva}</span></td>
             <td>${p.vendaMedia.toFixed(1)}</td>
             <td>${p.estoqueLivre.toFixed(0)}</td>
             <td><strong>${Math.round(p.diasLivre)}</strong></td>
             <td><span class="status-badge ${statusGrupo(p.status)}">${formatStatus(p.status)}</span></td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 
     if (prods.length > limite) {
         tbody.innerHTML += `<tr><td colspan="8" style="text-align:center;padding:12px;color:#64748b;font-style:italic;">Mostrando ${limite} de ${prods.length.toLocaleString('pt-BR')} ${isSku ? 'SKUs' : 'pontos'}. Use os filtros para refinar.</td></tr>`;
@@ -1196,6 +1217,7 @@ function updateCDAnalysis() {
             <div class="cd-status-row">
                 <span class="status-badge deficit" title="Necessidade de compra (<45 dias)">${c.deficit} compra</span>
                 <span class="status-badge saudavel" title="Necessidade de compra (45-60 dias)">${c.saudavel} ok</span>
+                ${c.reposicao > 0 ? `<span class="status-badge reposicao" title="Em reposição: estoque livre baixo, mas já coberto pelo que está a caminho">${c.reposicao} reposição</span>` : ''}
                 <span class="status-badge excesso" title="Atenção (60-100 dias)">${c.excesso} atenção</span>
                 ${c.semGiro > 0 ? `<span class="status-badge sem-giro" title="Problema (>100 dias)">${c.semGiro} problema</span>` : ''}
             </div>
@@ -1224,7 +1246,10 @@ function updateRecommendations() {
 
     if (filter === 'deficit') {
         intro = `Produtos abaixo de ${DIAS_MAX_SAUDAVEL} dias de cobertura. Comprar para atingir a meta de cobertura de cada linha (padrão ${META_DIAS_COBERTURA} dias, ajustável na coluna <strong>Meta</strong>), já descontado o que está a caminho e arredondado ao múltiplo da caixa de embarque.`;
-        const emDeficit = prods.filter(p => p.status === 'deficit' || p.status === 'saudavel');
+        // Inclui "reposicao" (déficit/saudável já coberto pelo que vem): assim eles
+        // seguem entrando na conta de "já com reposição a caminho" (jaRepostos) e saem
+        // da lista de compra pelo filtro comprar>0 logo abaixo — comportamento idêntico.
+        const emDeficit = prods.filter(p => p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao');
         lista = emDeficit.filter(p => memoriaCompra(p).comprar > 0)
             .sort((a, b) => a.diasLivre - b.diasLivre);
         jaRepostos = emDeficit.length - lista.length;
@@ -2464,13 +2489,13 @@ function escapeHtml(str) {
 }
 
 function formatStatus(status) {
-    return { deficit: 'Compra', saudavel: 'Compra', excesso: 'Atenção', 'sem-giro': 'Problema' }[status] || status;
+    return { deficit: 'Compra', saudavel: 'Compra', reposicao: 'Em reposição', excesso: 'Atenção', 'sem-giro': 'Problema' }[status] || status;
 }
 
 // Classe de cor pela faixa EXIBIDA (compra/atencao/problema), para o badge não sair
 // com duas cores no "Compra" (déficit vermelho + saudável verde).
 function statusGrupo(status) {
-    return { deficit: 'compra', saudavel: 'compra', excesso: 'atencao', 'sem-giro': 'problema' }[status] || status;
+    return { deficit: 'compra', saudavel: 'compra', reposicao: 'reposicao', excesso: 'atencao', 'sem-giro': 'problema' }[status] || status;
 }
 
 // ============================================
