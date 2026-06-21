@@ -1742,6 +1742,46 @@ function fmtMeses(dias) {
     return m >= 10 ? Math.round(m).toLocaleString('pt-BR') : m.toFixed(1).replace('.', ',');
 }
 
+// Barras Entrada × Saída de um ponto (CD+produto ou SC). Duas barras na mesma
+// escala: Saída = venda/mês; Entrada = estoque livre (sólido) + a caminho (hachura).
+// A escala da linha é a maior ponta (venda ou estoque+a caminho). A marca pontilhada
+// sobre a Entrada é "1 mês de venda" (= fim da barra de Saída). Sólido azul bem menor
+// que a Saída = a venda do mês supera o estoque que você tem na mão. A barra de Entrada
+// ainda mostra os dias de atendimento com o estoque total (livre + a caminho).
+function renderRitmoBarra(p, r) {
+    const vm = Math.max(p.vendaMedia || 0, 0);
+    const est = Math.max(p.estoqueLivre || 0, 0);
+    const cam = Math.max((p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0), 0);
+    const max = Math.max(vm, est + cam, 1);
+    const pct = n => (n / max * 100);
+    const saidaPct = pct(vm), estPct = pct(est), camPct = pct(cam);
+    const estFill = est > 0
+        ? `<div class="ritmo-bar-fill estoque" style="width:${estPct.toFixed(2)}%"></div>` : '';
+    const mes = (saidaPct > 0 && saidaPct < 100)
+        ? `<div class="ritmo-bar-mes" style="left:${saidaPct.toFixed(2)}%" title="1 mês de venda"></div>` : '';
+    const camFill = cam > 0
+        ? `<div class="ritmo-bar-cam" style="left:${estPct.toFixed(2)}%;width:${camPct.toFixed(2)}%" title="${cam.toLocaleString('pt-BR')} a caminho (chega depois)"></div>` : '';
+    const camLbl = cam > 0 ? ` <span class="cam">+${cam.toLocaleString('pt-BR')} a caminho</span>` : '';
+    // Dias de atendimento com o estoque TOTAL (livre + a caminho). Só aparece quando há
+    // algo a caminho — sem reposição, o total é igual ao livre, que já está no número à direita.
+    const diasTotal = vm > 0 ? Math.round((est + cam) / vm * 30) : null;
+    const diasLbl = (cam > 0 && diasTotal != null)
+        ? ` <span class="ritmo-bar-dias" title="Dias de atendimento com o estoque total: estoque livre + o que vem a caminho">→ <b>${diasTotal.toLocaleString('pt-BR')} d</b></span>` : '';
+    return `
+                    <div class="ritmo-barras">
+                        <div class="ritmo-bar-row">
+                            <span class="ritmo-bar-rot">Saída</span>
+                            <div class="ritmo-bar-track"><div class="ritmo-bar-fill saida" style="width:${saidaPct.toFixed(2)}%"></div></div>
+                            <span class="ritmo-bar-val"><b>${vm.toLocaleString('pt-BR')}</b>/mês</span>
+                        </div>
+                        <div class="ritmo-bar-row">
+                            <span class="ritmo-bar-rot">Entrada</span>
+                            <div class="ritmo-bar-track">${estFill}${camFill}${mes}</div>
+                            <span class="ritmo-bar-val"><b>${est.toLocaleString('pt-BR')}</b> agora${camLbl}${diasLbl}</span>
+                        </div>
+                    </div>`;
+}
+
 // Linha de leitura direta: bate o olho e lê o veredito + quantas vezes a venda supera o estoque.
 function renderRitmoTable(lista, hideCD, sc) {
     const rows = lista.map((o, idx) => {
@@ -1770,8 +1810,6 @@ function renderRitmoTable(lista, hideCD, sc) {
             ? `Santa Cruz · ${(p.nCDs || 1)} CD${(p.nCDs || 1) > 1 ? 's' : ''}`
             : (hideCD ? '' : escapeHtml(p.cd));
         const meta = [cdTxt, `curva ${p.curva}`].filter(Boolean).join(' · ');
-        const aCam = r.aCaminho > 0 ? ` · ${r.aCaminho.toLocaleString('pt-BR')} a caminho` : '';
-        const nums = `vende ${vm.toLocaleString('pt-BR')}/mês · ${est.toLocaleString('pt-BR')} em estoque${aCam}`;
 
         // Sugestão de compra (mesma conta da aba de Sugestões, mas com meta de 45 dias nesta visão),
         // JÁ DESCONTANDO estoque livre + o que está em trânsito e pendente de entrega.
@@ -1790,7 +1828,7 @@ function renderRitmoTable(lista, hideCD, sc) {
                 <div class="ritmo-sid">
                     <div class="ritmo-sname" title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 44)}</div>
                     <div class="ritmo-smeta">${meta}</div>
-                    <div class="ritmo-snums">${nums}</div>
+                    ${renderRitmoBarra(p, r)}
                 </div>
                 <div class="ritmo-sverd">
                     <div class="ritmo-sbig" style="color:${cor};">${big}</div>
