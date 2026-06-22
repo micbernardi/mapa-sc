@@ -42,19 +42,34 @@ const META_DIAS_MAX = 365;
 // inteira só para cobrir uma folga ínfima. Use 0 para voltar ao ceil puro.
 const TOLERANCIA_CAIXA = 0.10;
 
-// Meta de cobertura POR LINHA (CD + produto). Vazio = usa o padrão de 60 dias.
+// Meta de cobertura POR LINHA (CD + produto). Vazio = usa a meta global (metaDiasGlobal).
 // O usuário pode sobrescrever individualmente cada linha nas abas Sugestões e Detalhes.
 const metaDiasPorLinha = {};
+// Meta padrão aplicada a TODAS as linhas que não têm ajuste individual. Começa em
+// META_DIAS_COBERTURA e pode ser redefinida de uma vez no campo "Meta de dias para todos
+// os produtos" da aba Sugestões de Compra.
+let metaDiasGlobal = META_DIAS_COBERTURA;
 function chaveLinha(p) { return p.cd + '||' + p.sku; }
 function getMetaDias(p) {
     const v = metaDiasPorLinha[chaveLinha(p)];
-    return (typeof v === 'number' && !isNaN(v)) ? v : META_DIAS_COBERTURA;
+    return (typeof v === 'number' && !isNaN(v)) ? v : metaDiasGlobal;
 }
 function setMetaDiasLinha(p, valor) {
     let v = parseInt(valor, 10);
-    if (isNaN(v)) v = META_DIAS_COBERTURA;
+    if (isNaN(v)) v = metaDiasGlobal;
     v = Math.max(META_DIAS_MIN, Math.min(META_DIAS_MAX, v));
     metaDiasPorLinha[chaveLinha(p)] = v;
+    return v;
+}
+// Redefine a meta de dias de TODAS as linhas de uma vez. Zera os ajustes individuais
+// para que todo o portfólio passe a seguir o novo valor; ajustes por linha podem ser
+// refeitos depois na coluna Meta.
+function setMetaDiasTodos(valor) {
+    let v = parseInt(valor, 10);
+    if (isNaN(v)) v = META_DIAS_COBERTURA;
+    v = Math.max(META_DIAS_MIN, Math.min(META_DIAS_MAX, v));
+    metaDiasGlobal = v;
+    Object.keys(metaDiasPorLinha).forEach(k => delete metaDiasPorLinha[k]);
     return v;
 }
 
@@ -295,11 +310,23 @@ exportBtn.addEventListener('click', exportarExcel);
 
 // Edição da meta de dias POR LINHA (delegação de eventos — a tabela é redesenhada)
 document.getElementById('recommendationsContainer').addEventListener('change', (e) => {
+    // Campo "Meta de dias para todos os produtos": redefine a meta de todas as linhas
+    if (e.target.id === 'recMetaTodos') {
+        setMetaDiasTodos(e.target.value);
+        updateRecommendations();
+        return;
+    }
     const inp = e.target.closest('.row-meta-input');
     if (inp && inp.dataset.recIdx !== undefined) onRecMetaChange(parseInt(inp.dataset.recIdx, 10), inp.value);
 });
 // Ordenação por clique no cabeçalho da tabela de Sugestões
 document.getElementById('recommendationsContainer').addEventListener('click', (e) => {
+    // Botão "Aplicar a todos" do campo de meta em massa
+    if (e.target.closest('#recMetaTodosBtn')) {
+        const inp = document.getElementById('recMetaTodos');
+        if (inp) { setMetaDiasTodos(inp.value); updateRecommendations(); }
+        return;
+    }
     const th = e.target.closest('th.sortable');
     if (th && th.dataset.sortKey) ordenarRecPor(th.dataset.sortKey);
 });
@@ -863,6 +890,7 @@ function clearDashboard() {
     clearBtn.style.display = 'none';
     exportBtn.style.display = 'none';
     Object.keys(metaDiasPorLinha).forEach(k => delete metaDiasPorLinha[k]);
+    metaDiasGlobal = META_DIAS_COBERTURA;
     recListaAtual = [];
     detailSort = { key: null, dir: 'desc' };
     recSort = { key: null, dir: 'desc' };
@@ -1235,7 +1263,7 @@ function updateCDAnalysis() {
 
 function updateRecommendations() {
     if (!dashboardData) return;
-    const filter = recFilter.value || 'deficit';
+    const filter = recFilter.value || 'todos';
     const container = document.getElementById('recommendationsContainer');
 
     // Sugestão de compra é sempre por ponto de estoque (CD+Material). Usa o filtro GLOBAL
@@ -1249,7 +1277,7 @@ function updateRecommendations() {
     let jaRepostos = 0;
 
     if (filter === 'deficit') {
-        intro = `Produtos abaixo de ${DIAS_MAX_SAUDAVEL} dias de cobertura. Comprar para atingir a meta de cobertura de cada linha (padrão ${META_DIAS_COBERTURA} dias, ajustável na coluna <strong>Meta</strong>), já descontado o que está a caminho e arredondado ao múltiplo da caixa de embarque.`;
+        intro = `Produtos abaixo de ${DIAS_MAX_SAUDAVEL} dias de cobertura que ainda precisam de compra.`;
         // Inclui "reposicao" (déficit/saudável já coberto pelo que vem): assim eles
         // seguem entrando na conta de "já com reposição a caminho" (jaRepostos) e saem
         // da lista de compra pelo filtro comprar>0 logo abaixo — comportamento idêntico.
@@ -1258,19 +1286,23 @@ function updateRecommendations() {
             .sort((a, b) => a.diasLivre - b.diasLivre);
         jaRepostos = emDeficit.length - lista.length;
     } else if (filter === 'urgent') {
-        intro = 'Compra urgente: cobertura abaixo de 30 dias e ainda sem reposição suficiente a caminho. Comprar para atingir a meta de cada linha, já descontado o que está a caminho e arredondado ao múltiplo da caixa de embarque.';
+        intro = 'Compra urgente: cobertura abaixo de 30 dias e sem reposição suficiente a caminho.';
         const criticos = prods.filter(p => Math.round(p.diasLivre) < 30);
         lista = criticos.filter(p => memoriaCompra(p).comprar > 0)
             .sort((a, b) => (b.vendaMedia / (b.diasLivre + 1)) - (a.vendaMedia / (a.diasLivre + 1)));
         jaRepostos = criticos.length - lista.length;
     } else if (filter === 'performance') {
-        intro = 'Estoque parado: cobertura acima de 60 dias (atenção 60-100) e problema (>100 dias). Avaliar redução de compra ou remanejamento.';
+        intro = 'Estoque parado: atenção (60-100 dias) e problema (&gt;100 dias). Avaliar redução ou remanejamento.';
         lista = prods.filter(p => p.status === 'excesso' || p.status === 'sem-giro')
             .sort((a, b) => {
                 const da = a.diasLivre;
                 const db = b.diasLivre;
                 return db - da;
             });
+    } else if (filter === 'todos') {
+        intro = 'Todos os produtos do escopo, do menor para o maior em cobertura. Itens já cobertos aparecem com 0 un.';
+        lista = prods.slice().sort((a, b) => a.diasLivre - b.diasLivre);
+        jaRepostos = 0;
     }
 
     if (lista.length === 0) {
@@ -1285,16 +1317,35 @@ function updateRecommendations() {
         : (filtroCD.size === 1 ? `CD ${[...filtroCD][0]}` : `${filtroCD.size} CDs`);
     const totalComprar = lista.reduce((s, p) => s + memoriaCompra(p).comprar, 0);
     const totalCaixas = lista.reduce((s, p) => { const m = memoriaCompra(p); return s + (m.temMultiplo ? (m.caixas || 0) : 0); }, 0);
-    const semMultiplo = lista.filter(p => !memoriaCompra(p).temMultiplo).length;
+    // Conta "sem múltiplo" só entre os itens que de fato têm compra > 0 (em "Todos", a
+    // lista inclui itens já cobertos com 0 un, que não devem aparecer nesse aviso).
+    const semMultiplo = lista.filter(p => { const m = memoriaCompra(p); return m.comprar > 0 && !m.temMultiplo; }).length;
     const semMultTxt = semMultiplo > 0 ? ` · ${semMultiplo} item(ns) sem múltiplo cadastrado` : '';
     const caixasTxt = totalCaixas > 0 ? ` (${totalCaixas.toLocaleString('pt-BR')} caixas)` : '';
     const repostoTxt = jaRepostos > 0 ? ` · ${jaRepostos} já com reposição a caminho (fora da lista)` : '';
-    const introHtml = `<div class="rec-intro">${intro}<br><strong>${lista.length} itens</strong> a comprar em ${escopo}${filter !== 'performance' ? ` · sugestão total: <span class="rec-total"><strong>${totalComprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}</span>${repostoTxt}${semMultTxt}` : ''}</div>`;
+    const itensTxt = filter === 'todos'
+        ? `<strong>${lista.length} itens</strong> no total em ${escopo}`
+        : `<strong>${lista.length} itens</strong> a comprar em ${escopo}`;
+    const introHtml = `<div class="rec-intro">${intro}<br>${itensTxt}${filter !== 'performance' ? ` · sugestão total: <span class="rec-total"><strong>${totalComprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}</span>${repostoTxt}${semMultTxt}` : ''}</div>`;
+
+    // Campo de meta em massa: aparece para os critérios que mostram "Comprar" (não em parado)
+    const bulkHtml = filter !== 'performance' ? renderBulkMetaControl() : '';
 
     // Lista compacta (tabela). Sem teto baixo: todos os pontos abaixo de 60 dias com
     // necessidade de compra aparecem (o corte antigo de 300 escondia a maioria).
     recListaAtual = aplicarOrdenacaoRec(lista).slice(0, 5000);
-    container.innerHTML = introHtml + renderRecTable(recListaAtual, filter, filtroCD.size === 1);
+    container.innerHTML = bulkHtml + introHtml + renderRecTable(recListaAtual, filter, filtroCD.size === 1);
+}
+
+// Campo "Meta de dias para todos os produtos" no topo da aba Sugestões. Redefine a meta
+// de cobertura de TODAS as linhas de uma vez (zera ajustes individuais).
+function renderBulkMetaControl() {
+    return `<div class="rec-bulk-meta">
+        <label for="recMetaTodos">Meta de dias para <strong>todos os produtos</strong>:</label>
+        <input type="number" id="recMetaTodos" class="rec-bulk-input" min="${META_DIAS_MIN}" max="${META_DIAS_MAX}" step="1" value="${metaDiasGlobal}">
+        <button type="button" class="rec-bulk-btn" id="recMetaTodosBtn">Aplicar a todos</button>
+        <span class="rec-bulk-hint">Muda a meta de todas as linhas de uma vez. Depois você ainda pode ajustar linhas específicas na coluna <strong>Meta</strong>.</span>
+    </div>`;
 }
 
 // Lista de pontos atualmente exibida na aba Sugestões (para edição de meta por linha)
