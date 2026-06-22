@@ -1344,7 +1344,7 @@ function renderBulkMetaControl() {
         <label for="recMetaTodos">Meta de dias para <strong>todos os produtos</strong>:</label>
         <input type="number" id="recMetaTodos" class="rec-bulk-input" min="${META_DIAS_MIN}" max="${META_DIAS_MAX}" step="1" value="${metaDiasGlobal}">
         <button type="button" class="rec-bulk-btn" id="recMetaTodosBtn">Aplicar a todos</button>
-        <span class="rec-bulk-hint">Muda a meta de todas as linhas de uma vez. Depois você ainda pode ajustar linhas específicas na coluna <strong>Meta</strong>.</span>
+        <span class="rec-bulk-hint">Zera os ajustes feitos por linha.</span>
     </div>`;
 }
 
