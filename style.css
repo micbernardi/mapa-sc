@@ -1509,9 +1509,10 @@ canvas {
 .ritmo-dica { font-size: 0.78rem; color: var(--text-tertiary); font-style: italic; margin: 0 2px 8px; }
 
 /* a lista vira uma tabela: borda externa, linhas rentes separadas por traço fino */
-.ritmo-list { display: flex; flex-direction: column; gap: 0; max-width: 1080px; border: 0.5px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-xs); }
+/* sem overflow:hidden aqui: ele tornaria a lista o container de rolagem e mataria o sticky do cabeçalho. Os cantos arredondados são recompostos no .ritmo-rhead (topo) e no .ritmo-item:last-child (base). */
+.ritmo-list { display: flex; flex-direction: column; gap: 0; max-width: 1080px; border: 0.5px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-xs); }
 
-.ritmo-rhead { display: flex; align-items: center; gap: 14px; padding: 7px 14px 7px 17px; background: var(--bg-subtle); border-bottom: 0.5px solid var(--border); font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); }
+.ritmo-rhead { display: flex; align-items: center; gap: 14px; padding: 7px 14px 7px 17px; background: var(--bg-subtle); border-bottom: 0.5px solid var(--border); font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); position: sticky; top: var(--tabs-h); z-index: 5; border-top-left-radius: var(--radius-sm); border-top-right-radius: var(--radius-sm); }
 .ritmo-rhead .rh-name { flex: 1 1 auto; min-width: 0; }
 .ritmo-rhead .rh-venda { flex: 0 0 88px; text-align: right; }
 .ritmo-rhead .rh-cob { flex: 0 0 88px; text-align: right; }
@@ -1522,6 +1523,7 @@ canvas {
 .ritmo-rrow { display: flex; align-items: center; gap: 14px; background: var(--bg-card); border-bottom: 0.5px solid var(--border-soft); border-left: 3px solid var(--text-tertiary); padding: 7px 14px; cursor: pointer; transition: background .12s; }
 .ritmo-rrow:hover { background: var(--bg-subtle); }
 .ritmo-item:last-child .ritmo-rrow { border-bottom: 0; }
+.ritmo-item:last-child { border-bottom-left-radius: var(--radius-sm); border-bottom-right-radius: var(--radius-sm); overflow: hidden; }
 .ritmo-rname { flex: 1 1 auto; min-width: 0; }
 .ritmo-rn { font-size: 0.84rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ritmo-rm { font-size: 0.68rem; color: var(--text-secondary); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1538,6 +1540,7 @@ canvas {
 .ritmo-rcob-h .lbl { color: var(--text-tertiary); font-size: 0.62rem; }
 .ritmo-rcob-h .na { color: var(--text-tertiary); font-size: 0.72rem; }
 .ritmo-rcob-f { font-size: 0.62rem; color: var(--text-tertiary); margin-top: 1px; white-space: nowrap; }
+.ritmo-rcob-q { font-size: 0.6rem; font-weight: 600; color: var(--reposicao); margin-top: 1px; white-space: nowrap; }
 
 /* situação: etiqueta colorida (badge). A cor da situação vive aqui. */
 .ritmo-rsit { flex: 0 0 178px; min-width: 0; }

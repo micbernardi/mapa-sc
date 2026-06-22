@@ -7,6 +7,10 @@
 const DIAS_MIN_SAUDAVEL = 45;   // abaixo disso = déficit
 const DIAS_MAX_SAUDAVEL = 60;   // 60 ou mais = excesso (alinha com o filtro >= 60 dias)
 const DIAS_ENCALHADO = 100;     // acima disso = encalhado (estoque parado), mesmo com giro lento
+// Teto da faixa "No ritmo" SÓ da aba Ritmo Entrada × Saída. Desacoplado do DIAS_ENCALHADO
+// global (100, usado em classificar() / Visão Geral / Produtos): aqui a faixa saudável é mais
+// apertada. No ritmo = cobertura entre DIAS_MIN_SAUDAVEL (45) e este teto.
+const RITMO_TETO_DIAS = 90;
 
 // Aba Ritmo Entrada × Saída: variação % do giro recente vs base abaixo da qual o
 // movimento é "Estável" (ruído), e giro mínimo (un/mês) para confiar na tendência.
@@ -1567,7 +1571,7 @@ function chaveData(s) {
 // Racional de fluxo de um ponto (CD+produto, reserva Regular já consolidada).
 function calcularRitmo(p) {
     const PISO = DIAS_MIN_SAUDAVEL;   // 45 — abaixo = cobertura magra
-    const TETO = DIAS_ENCALHADO;      // 100 — acima = estoque travado
+    const TETO = RITMO_TETO_DIAS;     // 90 — acima = estoque travado (teto próprio do Ritmo, ver topo)
     const vm = p.vendaMedia || 0;
     const aCaminho = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
 
@@ -1589,8 +1593,6 @@ function calcularRitmo(p) {
     // Coberturas (mesma fórmula da AM; só muda o denominador)
     const cobAtual = p.diasLivre || 0;                                       // oficial (= coluna AM)
     const cobCaminho = vm > 0 ? (p.estoqueLivre + aCaminho) / vm * 30 : 0;    // com o que vem a caminho
-    const cobRecente = sRec > 0 ? (p.estoqueLivre / sRec) * 30                // se o ritmo recente seguir
-        : (p.estoqueLivre > 0 ? Infinity : 0);
 
     // Camada 1: estrutura do estoque
     let estrutura;
@@ -1631,7 +1633,7 @@ function calcularRitmo(p) {
 
     return {
         estrutura, tendencia, varTend, veredito, emReposicao, sBase, sRec, aCaminho,
-        cobAtual, cobCaminho, cobRecente, diasSemEntrada, prioridade
+        cobAtual, cobCaminho, diasSemEntrada, prioridade
     };
 }
 
@@ -1702,8 +1704,8 @@ function updateRitmo() {
     const introMap = {
         acima: `<strong>Demanda reprimida</strong>: a venda supera o estoque livre, cobertura abaixo de ${DIAS_MIN_SAUDAVEL} dias, e o que vem a caminho (se vem) não cobre. Risco de ruptura, prioridade de compra. A sugestão repõe até ${RITMO_META_DIAS} dias, já descontando o que vem. Os mais reprimidos primeiro.`,
         reposicao: `<strong>Em reposição</strong>: estoque na mão magro hoje (abaixo de ${DIAS_MIN_SAUDAVEL} dias), mas a reposição a caminho já recompõe a meta. Não é compra, é monitorar a entrega: se atrasar, vira ruptura. Os mais magros hoje primeiro.`,
-        abaixo: `<strong>Estoque sobrando</strong>: cobertura acima de ${DIAS_ENCALHADO} dias. Capital parado, avaliar frear reposição. Maior cobertura primeiro.`,
-        ritmo: `<strong>No ritmo</strong>: cobertura entre ${DIAS_MIN_SAUDAVEL} e ${DIAS_ENCALHADO} dias com o estoque na mão. Equilibrado, sem ação.`,
+        abaixo: `<strong>Estoque sobrando</strong>: cobertura acima de ${RITMO_TETO_DIAS} dias. Capital parado, avaliar frear reposição. Maior cobertura primeiro.`,
+        ritmo: `<strong>No ritmo</strong>: cobertura entre ${DIAS_MIN_SAUDAVEL} e ${RITMO_TETO_DIAS} dias com o estoque na mão. Equilibrado, sem ação.`,
         tudo: 'Todos os produtos com giro, do mais reprimido ao mais parado.'
     };
     const intro = `<div class="rec-intro">${introMap[foco] || introMap.acima}<br><strong>${lista.length} ${noun}</strong> em ${escopo}.</div>`;
@@ -1742,7 +1744,7 @@ function renderRitmoKpis(k, sc) {
     </div>`;
 }
 
-function ritmoZona(d) { return d < DIAS_MIN_SAUDAVEL ? 'acima' : d <= DIAS_ENCALHADO ? 'ritmo' : 'abaixo'; }
+function ritmoZona(d) { return d < DIAS_MIN_SAUDAVEL ? 'acima' : d <= RITMO_TETO_DIAS ? 'ritmo' : 'abaixo'; }
 const RITMO_COR = { acima: 'var(--deficit)', ritmo: 'var(--saudavel)', abaixo: 'var(--excesso)' };
 const RITMO_META_DIAS = 45;   // meta da sugestão de compra NESTA visão (alinhada à linha de alerta de 45 d). A aba de Sugestões segue em 60.
 
@@ -1795,13 +1797,19 @@ function renderRitmoTable(lista, hideCD, sc) {
         // Sóbria de propósito: a cor da situação fica na etiqueta, não aqui.
         const cobTip = semGiro
             ? 'Sem venda no período: cobertura indefinida.'
-            : `Cobertura com o estoque livre de hoje: ${cobHoje} dias.${temCaminho ? ` Prevista com o que vem a caminho (trânsito + entrega): ${cobFut} dias.` : ''}`;
+            : `Cobertura com o estoque livre de hoje: ${cobHoje} dias.${temCaminho ? ` Prevista com o que vem a caminho (${r.aCaminho.toLocaleString('pt-BR')} un em trânsito + entrega): ${cobFut} dias.` : ''}`;
         const cobSub = cobFut > cobHoje ? `${cobFut.toLocaleString('pt-BR')} d previsto` : 'sem reposição';
+        // Quanto de reposição vem a caminho (trânsito + entrega), logo abaixo do "previsto".
+        // Só aparece quando há reposição que de fato melhora a cobertura (evita "+0 un").
+        const repoQtd = (cobFut > cobHoje && r.aCaminho > 0)
+            ? `<div class="ritmo-rcob-q">+${r.aCaminho.toLocaleString('pt-BR')} un</div>`
+            : '';
         const cobHtml = semGiro
             ? `<div class="ritmo-rcob" title="${cobTip}"><div class="ritmo-rcob-h"><span class="na">sem venda</span></div></div>`
             : `<div class="ritmo-rcob" title="${cobTip}">
                     <div class="ritmo-rcob-h"><b>${cobHoje.toLocaleString('pt-BR')}</b> d <span class="lbl">hoje</span></div>
                     <div class="ritmo-rcob-f">${cobSub}</div>
+                    ${repoQtd}
                 </div>`;
 
         // Compra (coluna da direita): a sugestão, sempre em azul. Mesma conta de antes (meta de
@@ -1870,8 +1878,6 @@ function explicacaoRitmo(p, r) {
     cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n" style="color:${cor};">${fmt(r.cobAtual)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">livre hoje</div></div>`);
     if (r.aCaminho > 0)
         cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n">${fmt(r.cobCaminho)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">previsto</div></div>`);
-    if (isFinite(r.cobRecente) && r.sRec > 0 && Math.abs(r.cobRecente - r.cobAtual) >= 1)
-        cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n">${fmt(r.cobRecente)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l" title="se o ritmo recente de ${fmt(r.sRec)} un/mês seguir">ritmo recente</div></div>`);
     if (r.diasSemEntrada != null)
         cob.push(`<div class="rit-cob-cell rit-cob-ctx"><div class="rit-cob-n">${r.diasSemEntrada}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">desde a entrada</div></div>`);
     const cobHtml = `<div class="rit-cob">${cob.join('')}</div>`;
@@ -1887,11 +1893,11 @@ function explicacaoRitmo(p, r) {
     } else if (r.veredito === 'acima') {
         kw = dir || 'Reprimida'; txt = `a saída supera o estoque livre; cobertura abaixo de ${DIAS_MIN_SAUDAVEL} d e nada a caminho.`;
     } else if (r.veredito === 'abaixo') {
-        kw = dir || 'Sobrando'; txt = `estoque sobrando para o giro; cobertura acima de ${DIAS_ENCALHADO} d.`;
+        kw = dir || 'Sobrando'; txt = `estoque sobrando para o giro; cobertura acima de ${RITMO_TETO_DIAS} d.`;
     } else if (r.veredito === 'sem-giro') {
         kw = 'Sem giro'; txt = `sem venda na janela; cobertura indefinida.`;
     } else {
-        kw = dir || 'No ritmo'; txt = `entrada e saída equilibradas; cobertura na faixa ${DIAS_MIN_SAUDAVEL}–${DIAS_ENCALHADO} d.`;
+        kw = dir || 'No ritmo'; txt = `entrada e saída equilibradas; cobertura na faixa ${DIAS_MIN_SAUDAVEL}–${RITMO_TETO_DIAS} d.`;
     }
     const verdHtml = `<div class="rit-verd" style="border-left-color:${cor};"><b style="color:${cor};">${kw}</b> · ${txt}</div>`;
 
