@@ -1649,7 +1649,7 @@ function updateRitmo() {
     const container = document.getElementById('ritmoContainer');
     if (!container) return;
     const kpisEl = document.getElementById('ritmoKpis');
-    const foco = (ritmoFilter && ritmoFilter.value) || 'acima';
+    const foco = (ritmoFilter && ritmoFilter.value) || 'tudo';
     // Um CD específico selecionado ⇒ cai para "Por CD", a menos que SC tenha sido escolhido de propósito.
     if (ritmoView === 'sc' && filtroCD.size && !ritmoScExplicito) {
         ritmoView = 'cd';
