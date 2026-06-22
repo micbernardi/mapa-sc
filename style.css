@@ -18,11 +18,14 @@
     --excesso: #ea580c;
     --excesso-light: #f97316;
 
+    --reposicao: #0891b2;
+
     --bg: #f3f5f9;
     --bg-card: #ffffff;
     --bg-subtle: #f1f4f9;
     --border: #e7ebf2;
     --border-strong: #dbe1ec;
+    --border-soft: #eef1f6;
     --text-primary: #0f172a;
     --text-secondary: #64748b;
     --text-tertiary: #94a3b8;
@@ -1463,7 +1466,7 @@ canvas {
 .ritmo-leg-hint { margin-left: auto; color: var(--text-tertiary); font-style: italic; }
 
 /* ===== Ritmo: lista de barras ===== */
-.ritmo-list { display: flex; flex-direction: column; gap: 8px; }
+.ritmo-list { display: flex; flex-direction: column; gap: 8px; max-width: 1080px; }
 .ritmo-bar-row {
     display: flex;
     align-items: center;
@@ -1502,58 +1505,72 @@ canvas {
 .ritmo-exp { flex: 0 0 auto; color: var(--text-tertiary); font-size: 0.8rem; }
 .ritmo-detalhe { padding: 2px 4px 6px; }
 
-/* ===== Ritmo: linha de leitura direta ===== */
-.ritmo-dica { font-size: 0.78rem; color: var(--text-tertiary); font-style: italic; margin: 0 2px 10px; }
-.ritmo-srow {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    background: var(--bg-card);
-    border: 0.5px solid var(--border);
-    border-left: 3px solid var(--text-tertiary);
-    border-radius: var(--radius-sm);
-    padding: 11px 16px;
-    cursor: pointer;
-    transition: background .12s, border-color .12s;
-}
-.ritmo-srow:hover { background: var(--bg-subtle); }
-.ritmo-sid { flex: 1 1 auto; min-width: 0; }
-.ritmo-sname { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ritmo-smeta { font-size: 0.76rem; color: var(--text-secondary); margin-top: 3px; }
-.ritmo-snums { font-size: 0.76rem; color: var(--text-tertiary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ritmo-sverd { flex: 0 0 172px; text-align: right; }
-.ritmo-sbig { font-size: 1.4rem; font-weight: 700; line-height: 1.05; }
-.ritmo-sverd-l { font-size: 0.74rem; font-weight: 500; margin-top: 3px; line-height: 1.25; }
-.ritmo-compra { flex: 0 0 132px; text-align: right; padding-left: 14px; border-left: 0.5px solid var(--border); }
-.ritmo-compra-n { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); line-height: 1.05; }
-.ritmo-compra.zero .ritmo-compra-n { color: var(--text-tertiary); font-weight: 600; }
-.ritmo-compra-l { font-size: 0.7rem; color: var(--text-secondary); margin-top: 3px; line-height: 1.2; }
+/* ===== Ritmo: lista compacta (uma linha por produto) ===== */
+.ritmo-dica { font-size: 0.78rem; color: var(--text-tertiary); font-style: italic; margin: 0 2px 8px; }
 
-/* barras Entrada × Saída dentro do card (venda do mês vs estoque na mão) */
-.ritmo-barras { margin-top: 9px; display: flex; flex-direction: column; gap: 6px; }
-.ritmo-bar-row { display: flex; align-items: center; gap: 9px; }
-.ritmo-bar-rot { flex: 0 0 56px; font-size: 0.66rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em; }
-.ritmo-bar-track { position: relative; flex: 1 1 auto; height: 15px; background: var(--bg-subtle); border: 0.5px solid var(--border); border-radius: 8px; overflow: hidden; }
-.ritmo-bar-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 8px; }
-.ritmo-bar-fill.saida { background: linear-gradient(90deg, #64748b, #475569); }
-.ritmo-bar-fill.estoque { background: linear-gradient(90deg, #3b82f6, #2563eb); min-width: 3px; border-radius: 8px 0 0 8px; }
-.ritmo-bar-cam { position: absolute; top: 0; height: 100%; background-image: repeating-linear-gradient(45deg, #c7defb 0 5px, #e7f0fd 5px 10px); border-right: 1px solid #93c5fd; }
-.ritmo-bar-mes { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dotted #475569; z-index: 2; }
-.ritmo-bar-val { flex: 0 0 215px; font-size: 0.74rem; color: var(--text-primary); text-align: left; line-height: 1.3; }
-.ritmo-bar-val b { font-weight: 700; }
-.ritmo-bar-val .cam { color: var(--text-tertiary); font-weight: 500; }
-.ritmo-bar-dias { color: #2563eb; white-space: nowrap; }
+/* a lista vira uma tabela: borda externa, linhas rentes separadas por traço fino */
+.ritmo-list { display: flex; flex-direction: column; gap: 0; max-width: 1080px; border: 0.5px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-xs); }
+
+.ritmo-rhead { display: flex; align-items: center; gap: 14px; padding: 7px 14px 7px 17px; background: var(--bg-subtle); border-bottom: 0.5px solid var(--border); font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); }
+.ritmo-rhead .rh-name { flex: 1 1 auto; min-width: 0; }
+.ritmo-rhead .rh-venda { flex: 0 0 88px; text-align: right; }
+.ritmo-rhead .rh-cob { flex: 0 0 88px; text-align: right; }
+.ritmo-rhead .rh-sit { flex: 0 0 178px; }
+.ritmo-rhead .rh-buy { flex: 0 0 70px; text-align: right; }
+.ritmo-rhead .rh-exp { flex: 0 0 12px; }
+
+.ritmo-rrow { display: flex; align-items: center; gap: 14px; background: var(--bg-card); border-bottom: 0.5px solid var(--border-soft); border-left: 3px solid var(--text-tertiary); padding: 7px 14px; cursor: pointer; transition: background .12s; }
+.ritmo-rrow:hover { background: var(--bg-subtle); }
+.ritmo-item:last-child .ritmo-rrow { border-bottom: 0; }
+.ritmo-rname { flex: 1 1 auto; min-width: 0; }
+.ritmo-rn { font-size: 0.84rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ritmo-rm { font-size: 0.68rem; color: var(--text-secondary); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* venda/mês: ritmo de saída, sóbrio (substitui as mini-barras) */
+.ritmo-rvenda { flex: 0 0 88px; text-align: right; white-space: nowrap; }
+.ritmo-rvenda b { font-size: 0.92rem; font-weight: 700; color: var(--text-primary); }
+.ritmo-rvenda i { font-size: 0.6rem; color: var(--text-tertiary); font-style: normal; }
+
+/* cobertura: hoje (sóbrio) + previsto */
+.ritmo-rcob { flex: 0 0 88px; text-align: right; line-height: 1.05; }
+.ritmo-rcob-h { font-size: 0.7rem; color: var(--text-primary); white-space: nowrap; }
+.ritmo-rcob-h b { font-size: 1.02rem; font-weight: 800; }
+.ritmo-rcob-h .lbl { color: var(--text-tertiary); font-size: 0.62rem; }
+.ritmo-rcob-h .na { color: var(--text-tertiary); font-size: 0.72rem; }
+.ritmo-rcob-f { font-size: 0.62rem; color: var(--text-tertiary); margin-top: 1px; white-space: nowrap; }
+
+/* situação: etiqueta colorida (badge). A cor da situação vive aqui. */
+.ritmo-rsit { flex: 0 0 178px; min-width: 0; }
+.ritmo-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; white-space: nowrap; max-width: 100%; }
+.ritmo-pill-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+.ritmo-pill.deficit   { background: rgba(220, 38, 38, 0.10); color: #b91c1c; }
+.ritmo-pill.deficit .ritmo-pill-dot   { background: var(--deficit); }
+.ritmo-pill.saudavel  { background: rgba(22, 163, 74, 0.11); color: #15803d; }
+.ritmo-pill.saudavel .ritmo-pill-dot  { background: var(--saudavel); }
+.ritmo-pill.excesso   { background: rgba(234, 88, 12, 0.11); color: #c2410c; }
+.ritmo-pill.excesso .ritmo-pill-dot   { background: var(--excesso); }
+.ritmo-pill.reposicao { background: rgba(8, 145, 178, 0.12); color: #0e7490; }
+.ritmo-pill.reposicao .ritmo-pill-dot { background: var(--reposicao); }
+.ritmo-pill.neutro    { background: rgba(100, 116, 139, 0.12); color: var(--text-secondary); }
+.ritmo-pill.neutro .ritmo-pill-dot    { background: var(--text-tertiary); }
+
+/* comprar: sempre azul; zero apagado */
+.ritmo-rbuy { flex: 0 0 70px; text-align: right; white-space: nowrap; }
+.ritmo-rbuy b { font-size: 1.02rem; font-weight: 800; color: var(--primary); }
+.ritmo-rbuy i { font-size: 0.58rem; color: var(--text-tertiary); font-style: normal; margin-left: 2px; }
+.ritmo-rbuy.zero b { color: var(--text-tertiary); font-weight: 700; }
+.ritmo-rbuy.zero i { display: none; }
+
+.ritmo-rexp { flex: 0 0 12px; color: var(--text-tertiary); font-size: 0.8rem; text-align: center; }
 
 @media (max-width: 640px) {
-    .ritmo-nome { flex-basis: 120px; }
-    .ritmo-val { flex-basis: 84px; }
-    .ritmo-legend { font-size: 0.72rem; gap: 10px; }
-    .ritmo-leg-hint { margin-left: 0; flex-basis: 100%; }
-    .ritmo-srow { gap: 10px; padding: 10px 12px; }
-    .ritmo-sverd { flex-basis: 104px; }
-    .ritmo-sbig { font-size: 1.15rem; }
-    .ritmo-compra { flex-basis: 84px; padding-left: 8px; }
-    .ritmo-compra-n { font-size: 1rem; }
-    .ritmo-bar-rot { flex-basis: 44px; font-size: 0.6rem; }
-    .ritmo-bar-val { flex-basis: 120px; font-size: 0.66rem; }
+    .ritmo-list { max-width: none; }
+    .ritmo-rhead { display: none; }
+    .ritmo-rrow { gap: 9px; padding: 7px 10px; }
+    .ritmo-rvenda { flex-basis: 64px; }
+    .ritmo-rcob { flex-basis: 72px; }
+    .ritmo-rsit { flex: 0 1 auto; }
+    .ritmo-rbuy { flex-basis: 54px; }
+    .ritmo-rcob-h b, .ritmo-rbuy b { font-size: 0.95rem; }
+    .ritmo-pill { font-size: 0.66rem; padding: 3px 8px; }
 }

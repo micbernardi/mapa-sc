@@ -1600,11 +1600,24 @@ function calcularRitmo(p) {
     else estrutura = 'sem-giro';                     // sem venda: cobertura indefinida
 
     // Camada 3: veredito (acima / no ritmo / abaixo)
+    // Risco de FALTA unificado: havendo reposição a caminho, o piso de cobertura é medido
+    // sobre o pipeline (livre + a caminho), não só sobre o livre de hoje. Assim com-estoque
+    // passa a enxergar a reposição igual ao em-fluxo. O EXCESSO continua olhando só o que já
+    // está parado na mão (livre), porque o que vem a caminho ainda não é estoque travado.
     let veredito;
     if (estrutura === 'sem-giro') veredito = 'sem-giro';
     else if (estrutura === 'ruptura') veredito = 'acima';
     else if (estrutura === 'em-fluxo') veredito = cobCaminho < PISO ? 'acima' : 'ritmo';
-    else veredito = cobAtual < PISO ? 'acima' : cobAtual <= TETO ? 'ritmo' : 'abaixo';
+    else if (cobAtual > TETO) veredito = 'abaixo';
+    else {
+        const cobEfetiva = aCaminho > 0 ? cobCaminho : cobAtual;
+        veredito = cobEfetiva < PISO ? 'acima' : 'ritmo';
+    }
+
+    // "Em reposição": estoque na mão magro hoje (abaixo do piso), mas o que vem a caminho
+    // recompõe a cobertura até o piso. Não é caso de compra, é de monitorar a entrega.
+    // Equivale à sugestão = 0 (livre + a caminho já cobre RITMO_META_DIAS, que é igual a PISO).
+    const emReposicao = aCaminho > 0 && veredito === 'ritmo' && cobAtual < PISO;
 
     const diasSemEntrada = diasDesde(p.dataUltimaEntrada);
     let prioridade = 0;
@@ -1617,7 +1630,7 @@ function calcularRitmo(p) {
     else if (veredito === 'ritmo') prioridade = 10;
 
     return {
-        estrutura, tendencia, varTend, veredito, sBase, sRec, aCaminho,
+        estrutura, tendencia, varTend, veredito, emReposicao, sBase, sRec, aCaminho,
         cobAtual, cobCaminho, cobRecente, diasSemEntrada, prioridade
     };
 }
@@ -1653,14 +1666,16 @@ function updateRitmo() {
         .filter(o => o.r.veredito !== 'sem-giro');
 
     const acima = todos.filter(o => o.r.veredito === 'acima');
-    const ritmo = todos.filter(o => o.r.veredito === 'ritmo');
+    const reposicao = todos.filter(o => o.r.emReposicao);
+    const ritmo = todos.filter(o => o.r.veredito === 'ritmo' && !o.r.emReposicao);
     const abaixo = todos.filter(o => o.r.veredito === 'abaixo');
     const ruptura = acima.filter(o => o.r.estrutura === 'ruptura').length;
     const rsParado = abaixo.reduce((s, o) => s + (o.p.estoqueLivreRS || 0), 0);
-    if (kpisEl) kpisEl.innerHTML = renderRitmoKpis({ acima: acima.length, ruptura, ritmo: ritmo.length, abaixo: abaixo.length, rsParado }, sc);
+    if (kpisEl) kpisEl.innerHTML = renderRitmoKpis({ acima: acima.length, ruptura, reposicao: reposicao.length, ritmo: ritmo.length, abaixo: abaixo.length, rsParado }, sc);
 
     let lista;
     if (foco === 'acima') lista = acima.slice();
+    else if (foco === 'reposicao') lista = reposicao.slice();
     else if (foco === 'abaixo') lista = abaixo.slice();
     else if (foco === 'ritmo') lista = ritmo.slice();
     else lista = todos.slice();
@@ -1671,7 +1686,7 @@ function updateRitmo() {
     else if (ordem === 'nome') lista.sort((a, b) => rotuloProduto(a.p).localeCompare(rotuloProduto(b.p), 'pt-BR'));
     else if (ordem === 'reprimido') lista.sort((a, b) => (b.r.prioridade - a.r.prioridade) || (a.r.cobAtual - b.r.cobAtual));
     else if (foco === 'abaixo') lista.sort((a, b) => b.r.cobAtual - a.r.cobAtual);
-    else if (foco === 'ritmo') lista.sort((a, b) => a.r.cobAtual - b.r.cobAtual);
+    else if (foco === 'ritmo' || foco === 'reposicao') lista.sort((a, b) => a.r.cobAtual - b.r.cobAtual);
     else lista.sort((a, b) => (b.r.prioridade - a.r.prioridade) || (a.r.cobAtual - b.r.cobAtual));
 
     ritmoListaAtual = lista;
@@ -1685,9 +1700,10 @@ function updateRitmo() {
     const escopo = sc ? ('Santa Cruz (todos os CDs)' + (filtroCD.size ? ' · filtro de CD não se aplica aqui' : ''))
         : (filtroCD.size === 0 ? 'todos os CDs' : (filtroCD.size === 1 ? `CD ${[...filtroCD][0]}` : `${filtroCD.size} CDs`));
     const introMap = {
-        acima: `<strong>Demanda reprimida</strong>: a venda supera o estoque livre, cobertura abaixo de ${DIAS_MIN_SAUDAVEL} dias. Risco de ruptura, prioridade de compra. A sugestão repõe até ${RITMO_META_DIAS} dias de cobertura, já descontando o que vem a caminho. Os mais reprimidos primeiro.`,
+        acima: `<strong>Demanda reprimida</strong>: a venda supera o estoque livre, cobertura abaixo de ${DIAS_MIN_SAUDAVEL} dias, e o que vem a caminho (se vem) não cobre. Risco de ruptura, prioridade de compra. A sugestão repõe até ${RITMO_META_DIAS} dias, já descontando o que vem. Os mais reprimidos primeiro.`,
+        reposicao: `<strong>Em reposição</strong>: estoque na mão magro hoje (abaixo de ${DIAS_MIN_SAUDAVEL} dias), mas a reposição a caminho já recompõe a meta. Não é compra, é monitorar a entrega: se atrasar, vira ruptura. Os mais magros hoje primeiro.`,
         abaixo: `<strong>Estoque sobrando</strong>: cobertura acima de ${DIAS_ENCALHADO} dias. Capital parado, avaliar frear reposição. Maior cobertura primeiro.`,
-        ritmo: `<strong>No ritmo</strong>: cobertura entre ${DIAS_MIN_SAUDAVEL} e ${DIAS_ENCALHADO} dias, ou reposição a caminho recompondo.`,
+        ritmo: `<strong>No ritmo</strong>: cobertura entre ${DIAS_MIN_SAUDAVEL} e ${DIAS_ENCALHADO} dias com o estoque na mão. Equilibrado, sem ação.`,
         tudo: 'Todos os produtos com giro, do mais reprimido ao mais parado.'
     };
     const intro = `<div class="rec-intro">${introMap[foco] || introMap.acima}<br><strong>${lista.length} ${noun}</strong> em ${escopo}.</div>`;
@@ -1695,7 +1711,7 @@ function updateRitmo() {
 }
 
 function renderRitmoKpis(k, sc) {
-    const totalReal = k.acima + k.ritmo + k.abaixo;
+    const totalReal = k.acima + (k.reposicao || 0) + k.ritmo + k.abaixo;
     const total = totalReal || 1;
     const noun = sc ? 'SKUs' : 'produtos';
     const seg = (n, cor, label) => {
@@ -1712,11 +1728,13 @@ function renderRitmoKpis(k, sc) {
         <div class="ritmo-portfolio-top">${totalReal.toLocaleString('pt-BR')} ${noun} com giro, por situação</div>
         <div class="ritmo-portfolio-bar">
             ${seg(k.acima, 'var(--deficit)', 'Demanda reprimida')}
+            ${seg(k.reposicao || 0, 'var(--reposicao)', 'Em reposição')}
             ${seg(k.ritmo, 'var(--saudavel)', 'No ritmo')}
             ${seg(k.abaixo, 'var(--excesso)', 'Estoque sobrando')}
         </div>
         <div class="ritmo-portfolio-leg">
             ${leg('var(--deficit)', 'Demanda reprimida', k.acima)}
+            ${leg('var(--reposicao)', 'Em reposição', k.reposicao || 0)}
             ${leg('var(--saudavel)', 'No ritmo', k.ritmo)}
             ${leg('var(--excesso)', 'Estoque sobrando', k.abaixo)}
         </div>
@@ -1726,8 +1744,6 @@ function renderRitmoKpis(k, sc) {
 
 function ritmoZona(d) { return d < DIAS_MIN_SAUDAVEL ? 'acima' : d <= DIAS_ENCALHADO ? 'ritmo' : 'abaixo'; }
 const RITMO_COR = { acima: 'var(--deficit)', ritmo: 'var(--saudavel)', abaixo: 'var(--excesso)' };
-const RITMO_DIAS_MAX = 150;   // teto da régua da barra (dias); acima disso a barra enche
-const RITMO_TOL_REC = 5;      // só desenha a marca de ritmo recente se ela ficar a 5+ dias da cobertura atual (senão fica em cima e polui)
 const RITMO_META_DIAS = 45;   // meta da sugestão de compra NESTA visão (alinhada à linha de alerta de 45 d). A aba de Sugestões segue em 60.
 
 // Formatos compactos para a leitura direta
@@ -1742,127 +1758,118 @@ function fmtMeses(dias) {
     return m >= 10 ? Math.round(m).toLocaleString('pt-BR') : m.toFixed(1).replace('.', ',');
 }
 
-// Barras Entrada × Saída de um ponto (CD+produto ou SC). Duas barras na mesma
-// escala: Saída = venda/mês; Entrada = estoque livre (sólido) + a caminho (hachura).
-// A escala da linha é a maior ponta (venda ou estoque+a caminho). A marca pontilhada
-// sobre a Entrada é "1 mês de venda" (= fim da barra de Saída). Sólido azul bem menor
-// que a Saída = a venda do mês supera o estoque que você tem na mão. A barra de Entrada
-// ainda mostra os dias de atendimento com o estoque total (livre + a caminho).
-function renderRitmoBarra(p, r) {
-    const vm = Math.max(p.vendaMedia || 0, 0);
-    const est = Math.max(p.estoqueLivre || 0, 0);
-    const cam = Math.max((p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0), 0);
-    const max = Math.max(vm, est + cam, 1);
-    const pct = n => (n / max * 100);
-    const saidaPct = pct(vm), estPct = pct(est), camPct = pct(cam);
-    const estFill = est > 0
-        ? `<div class="ritmo-bar-fill estoque" style="width:${estPct.toFixed(2)}%"></div>` : '';
-    const mes = (saidaPct > 0 && saidaPct < 100)
-        ? `<div class="ritmo-bar-mes" style="left:${saidaPct.toFixed(2)}%" title="1 mês de venda"></div>` : '';
-    const camFill = cam > 0
-        ? `<div class="ritmo-bar-cam" style="left:${estPct.toFixed(2)}%;width:${camPct.toFixed(2)}%" title="${cam.toLocaleString('pt-BR')} a caminho (chega depois)"></div>` : '';
-    const camLbl = cam > 0 ? ` <span class="cam">+${cam.toLocaleString('pt-BR')} a caminho</span>` : '';
-    // Dias de atendimento com o estoque TOTAL (livre + a caminho). Só aparece quando há
-    // algo a caminho — sem reposição, o total é igual ao livre, que já está no número à direita.
-    const diasTotal = vm > 0 ? Math.round((est + cam) / vm * 30) : null;
-    const diasLbl = (cam > 0 && diasTotal != null)
-        ? ` <span class="ritmo-bar-dias" title="Dias de atendimento com o estoque total: estoque livre + o que vem a caminho">→ <b>${diasTotal.toLocaleString('pt-BR')} d</b></span>` : '';
-    return `
-                    <div class="ritmo-barras">
-                        <div class="ritmo-bar-row">
-                            <span class="ritmo-bar-rot">Saída</span>
-                            <div class="ritmo-bar-track"><div class="ritmo-bar-fill saida" style="width:${saidaPct.toFixed(2)}%"></div></div>
-                            <span class="ritmo-bar-val"><b>${vm.toLocaleString('pt-BR')}</b>/mês</span>
-                        </div>
-                        <div class="ritmo-bar-row">
-                            <span class="ritmo-bar-rot">Entrada</span>
-                            <div class="ritmo-bar-track">${estFill}${camFill}${mes}</div>
-                            <span class="ritmo-bar-val"><b>${est.toLocaleString('pt-BR')}</b> agora${camLbl}${diasLbl}</span>
-                        </div>
-                    </div>`;
-}
-
-// Linha de leitura direta: bate o olho e lê o veredito + quantas vezes a venda supera o estoque.
+// Linha de leitura direta: bate o olho e lê o veredito + a cobertura em dias.
 function renderRitmoTable(lista, hideCD, sc) {
     const rows = lista.map((o, idx) => {
         const p = o.p, r = o.r;
-        const cor = RITMO_COR[r.veredito];
-        const cob = Math.round(r.cobAtual);
-        const est = p.estoqueLivre || 0;
-        const vm = p.vendaMedia || 0;
-
-        // Número grande SEMPRE = venda ÷ estoque (quantas vezes a venda mensal supera o estoque).
-        // Os dias de cobertura ficam sempre na linha do veredito, ao lado. Mesma unidade em toda linha.
-        let big, verd;
-        if (r.estrutura === 'ruptura') {
-            big = 'sem estoque'; verd = 'ruptura, nada a caminho';
-        } else if (r.estrutura === 'em-fluxo') {
-            big = '0 livre';
-            verd = `${r.veredito === 'ritmo' ? 'repondo' : 'reposição insuf.'} · ${Math.round(r.cobCaminho).toLocaleString('pt-BR')} d a caminho`;
-        } else {
-            big = `${fmtMult(vm / est)}×`;
-            const verdWord = r.veredito === 'acima' ? 'demanda reprimida'
-                : r.veredito === 'abaixo' ? 'estoque sobrando' : 'no ritmo';
-            verd = `${verdWord} · ${cob} d`;
-        }
 
         const cdTxt = sc
             ? `Santa Cruz · ${(p.nCDs || 1)} CD${(p.nCDs || 1) > 1 ? 's' : ''}`
             : (hideCD ? '' : escapeHtml(p.cd));
         const meta = [cdTxt, `curva ${p.curva}`].filter(Boolean).join(' · ');
 
-        // Sugestão de compra (mesma conta da aba de Sugestões, mas com meta de 45 dias nesta visão),
-        // JÁ DESCONTANDO estoque livre + o que está em trânsito e pendente de entrega.
+        // VENDA/MÊS (coluna do ritmo de saída): a venda média mensal, sóbria. Substitui as
+        // mini-barras Entrada × Saída — agora a velocidade vem em número, e a cobertura
+        // (coluna ao lado) é esse estoque traduzido em dias.
+        const vm = Math.max(p.vendaMedia || 0, 0);
+        const vendaHtml = `<div class="ritmo-rvenda"><b>${Math.round(vm).toLocaleString('pt-BR')}</b><i>/mês</i></div>`;
+
+        // DIAGNÓSTICO (bloco do meio): a cobertura em dias (sóbria) + a situação numa etiqueta.
+        // A cor agora vive na etiqueta (pill) da Situação, não no número da cobertura.
+        // "hoje" = só o estoque livre; "previsto" = livre + a caminho.
+        const semGiro = r.veredito === 'sem-giro';
+        const cobHoje = Math.max(0, Math.round(r.cobAtual));
+        const cobFut = Math.max(0, Math.round(r.cobCaminho));
+        const temCaminho = r.aCaminho > 0;
+        // Status + cor (borda da linha) + tom da etiqueta (pill) por estado. "Em reposição"
+        // (cyan) = magro hoje mas o que vem cobre a meta. "Reposição insuficiente" = vem algo
+        // mas não cobre (segue vermelho, é compra).
+        let statusWord, cor, tone;
+        if (r.estrutura === 'ruptura') { statusWord = 'Ruptura'; cor = 'var(--deficit)'; tone = 'deficit'; }
+        else if (r.emReposicao) { statusWord = 'Em reposição'; cor = 'var(--reposicao)'; tone = 'reposicao'; }
+        else if (r.veredito === 'acima') { statusWord = temCaminho ? 'Reposição insuficiente' : 'Demanda reprimida'; cor = 'var(--deficit)'; tone = 'deficit'; }
+        else if (r.veredito === 'abaixo') { statusWord = 'Estoque sobrando'; cor = 'var(--excesso)'; tone = 'excesso'; }
+        else if (semGiro) { statusWord = 'Sem giro'; cor = 'var(--text-secondary)'; tone = 'neutro'; }
+        else { statusWord = 'No ritmo'; cor = 'var(--saudavel)'; tone = 'saudavel'; }
+        // Cobertura (coluna do meio): "hoje" = só o estoque livre; "previsto" = livre + a caminho.
+        // Sóbria de propósito: a cor da situação fica na etiqueta, não aqui.
+        const cobTip = semGiro
+            ? 'Sem venda no período: cobertura indefinida.'
+            : `Cobertura com o estoque livre de hoje: ${cobHoje} dias.${temCaminho ? ` Prevista com o que vem a caminho (trânsito + entrega): ${cobFut} dias.` : ''}`;
+        const cobSub = cobFut > cobHoje ? `${cobFut.toLocaleString('pt-BR')} d previsto` : 'sem reposição';
+        const cobHtml = semGiro
+            ? `<div class="ritmo-rcob" title="${cobTip}"><div class="ritmo-rcob-h"><span class="na">sem venda</span></div></div>`
+            : `<div class="ritmo-rcob" title="${cobTip}">
+                    <div class="ritmo-rcob-h"><b>${cobHoje.toLocaleString('pt-BR')}</b> d <span class="lbl">hoje</span></div>
+                    <div class="ritmo-rcob-f">${cobSub}</div>
+                </div>`;
+
+        // Compra (coluna da direita): a sugestão, sempre em azul. Mesma conta de antes (meta de
+        // 45 dias, já descontando livre + a caminho). Zero fica apagado.
         const mc = memoriaCompra(p, RITMO_META_DIAS);
         const compra = mc.comprar || 0;
         const compraTip = compra > 0
-            ? `Comprar para ${mc.diasMeta} dias, já descontado ${est.toLocaleString('pt-BR')} livre${r.aCaminho > 0 ? ' + ' + r.aCaminho.toLocaleString('pt-BR') + ' a caminho' : ''}.`
+            ? `Comprar para ${mc.diasMeta} dias, já descontado ${(p.estoqueLivre || 0).toLocaleString('pt-BR')} livre${r.aCaminho > 0 ? ' + ' + r.aCaminho.toLocaleString('pt-BR') + ' a caminho' : ''}.`
             : (r.veredito === 'acima' && r.aCaminho > 0
                 ? `O que vem a caminho (${r.aCaminho.toLocaleString('pt-BR')} un) já cobre a meta de ${mc.diasMeta} dias.`
                 : `Cobertura já na meta de ${mc.diasMeta} dias.`);
-        const compraHtml = `<div class="ritmo-compra${compra > 0 ? '' : ' zero'}" title="${compraTip}"><div class="ritmo-compra-n">${compra.toLocaleString('pt-BR')}</div><div class="ritmo-compra-l">Sugestão de compra</div></div>`;
+        const buyHtml = compra > 0
+            ? `<div class="ritmo-rbuy" title="${compraTip}"><b>${compra.toLocaleString('pt-BR')}</b><i>un</i></div>`
+            : `<div class="ritmo-rbuy zero" title="${compraTip}"><b>0</b></div>`;
 
         return `
         <div class="ritmo-item">
-            <div class="ritmo-srow" onclick="toggleRitmoDetail(${idx})" style="border-left-color:${cor};">
-                <div class="ritmo-sid">
-                    <div class="ritmo-sname" title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 44)}</div>
-                    <div class="ritmo-smeta">${meta}</div>
-                    ${renderRitmoBarra(p, r)}
+            <div class="ritmo-rrow" onclick="toggleRitmoDetail(${idx})" style="border-left-color:${cor};">
+                <div class="ritmo-rname">
+                    <div class="ritmo-rn" title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 44)}</div>
+                    <div class="ritmo-rm">${meta}</div>
                 </div>
-                <div class="ritmo-sverd">
-                    <div class="ritmo-sbig" style="color:${cor};">${big}</div>
-                    <div class="ritmo-sverd-l" style="color:${cor};">${verd}</div>
-                </div>
-                ${compraHtml}
-                <span class="ritmo-exp" id="ritexp-${idx}">▸</span>
+                ${vendaHtml}
+                ${cobHtml}
+                <div class="ritmo-rsit"><span class="ritmo-pill ${tone}"><span class="ritmo-pill-dot"></span>${statusWord}</span></div>
+                ${buyHtml}
+                <span class="ritmo-rexp" id="ritexp-${idx}">▸</span>
             </div>
             <div class="ritmo-detalhe" id="ritdet-${idx}" style="display:none;">${explicacaoRitmo(p, r)}</div>
         </div>`;
     }).join('');
 
-    const dica = sc
+    const base = sc
         ? 'Somado entre todos os CDs da Santa Cruz. Clique numa linha para a memória de cálculo.'
         : 'Cada linha é um produto num CD. Clique para a memória de cálculo.';
-    return `<div class="ritmo-dica">${dica}</div><div class="ritmo-list">${rows}</div>`;
+    const dica = `${base} Venda/mês é o ritmo de saída; cobertura é esse estoque traduzido em dias.`;
+    const head = `<div class="ritmo-rhead">
+            <span class="rh-name">Produto</span>
+            <span class="rh-venda">Venda/mês</span>
+            <span class="rh-cob">Cobertura</span>
+            <span class="rh-sit">Situação</span>
+            <span class="rh-buy">Comprar</span>
+            <span class="rh-exp"></span>
+        </div>`;
+    return `<div class="ritmo-dica">${dica}</div><div class="ritmo-list">${head}${rows}</div>`;
 }
 
-// Memória do ritmo — compacta: o gap de cobertura lado a lado, o veredito em 1
-// linha, a conta de compra inteira e onde o SKU vende. Sem repetir o que a linha
-// já mostra (venda média, estoque livre e a caminho ficam no cabeçalho).
+// Memória do ritmo — compacta: os números do produto, o gap de cobertura lado a lado,
+// o veredito em 1 linha, a conta de compra inteira e onde o SKU vende.
 function explicacaoRitmo(p, r) {
     const fmt = n => isFinite(n) ? Math.round(n).toLocaleString('pt-BR') : '∞';
-    const cor = RITMO_COR[r.veredito] || 'var(--text-secondary)';
+    const cor = r.emReposicao ? 'var(--reposicao)' : (RITMO_COR[r.veredito] || 'var(--text-secondary)');
     const dir = (r.tendencia === 'baixo' || r.varTend == null) ? null
         : r.tendencia === 'acelerando' ? 'Acelerando'
         : r.tendencia === 'desacelerando' ? 'Desacelerando'
         : 'Estável';
 
+    // 0) Números do produto (saíram da linha compacta; aqui ficam por extenso).
+    const vmF = Math.round(p.vendaMedia || 0).toLocaleString('pt-BR');
+    const livreF = Math.round(p.estoqueLivre || 0).toLocaleString('pt-BR');
+    const camNum = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
+    const numsHtml = `<div class="rit-line"><span class="rit-line-rot">Fluxo</span><span class="rit-line-v">Saída <b>${vmF}</b>/mês · livre na mão <b>${livreF}</b>${camNum > 0 ? ` · a caminho <b>${camNum.toLocaleString('pt-BR')}</b>` : ' · nada a caminho'}</span></div>`;
+
     // 1) Coberturas lado a lado: o gap entre elas é o sinal do ritmo.
     const cob = [];
     cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n" style="color:${cor};">${fmt(r.cobAtual)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">livre hoje</div></div>`);
     if (r.aCaminho > 0)
-        cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n">${fmt(r.cobCaminho)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">com o que vem</div></div>`);
+        cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n">${fmt(r.cobCaminho)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l">previsto</div></div>`);
     if (isFinite(r.cobRecente) && r.sRec > 0 && Math.abs(r.cobRecente - r.cobAtual) >= 1)
         cob.push(`<div class="rit-cob-cell"><div class="rit-cob-n">${fmt(r.cobRecente)}<span class="rit-cob-u">d</span></div><div class="rit-cob-l" title="se o ritmo recente de ${fmt(r.sRec)} un/mês seguir">ritmo recente</div></div>`);
     if (r.diasSemEntrada != null)
@@ -1873,12 +1880,12 @@ function explicacaoRitmo(p, r) {
     let kw, txt;
     if (r.estrutura === 'ruptura') {
         kw = 'Ruptura'; txt = `livre zerado e nada a caminho; vende ${fmt(p.vendaMedia)}/mês.`;
-    } else if (r.estrutura === 'em-fluxo' && r.veredito === 'acima') {
-        kw = 'Livre zerado'; txt = `o que vem a caminho cobre só ${fmt(r.cobCaminho)} d (abaixo de ${DIAS_MIN_SAUDAVEL}). A reposição não acompanha.`;
-    } else if (r.estrutura === 'em-fluxo') {
-        kw = 'Em reposição'; txt = `livre zerado, mas o caminho recompõe ${fmt(r.cobCaminho)} d de cobertura.`;
+    } else if (r.emReposicao) {
+        kw = 'Em reposição'; txt = `livre cobre só ${fmt(r.cobAtual)} d hoje, mas o que vem a caminho recompõe ${fmt(r.cobCaminho)} d (acima de ${DIAS_MIN_SAUDAVEL}). Monitorar a entrega.`;
+    } else if (r.veredito === 'acima' && r.aCaminho > 0) {
+        kw = 'Reposição insuficiente'; txt = `livre cobre ${fmt(r.cobAtual)} d e o que vem leva só a ${fmt(r.cobCaminho)} d (abaixo de ${DIAS_MIN_SAUDAVEL}). A reposição não acompanha.`;
     } else if (r.veredito === 'acima') {
-        kw = dir || 'Reprimida'; txt = `a saída supera o estoque livre; cobertura abaixo de ${DIAS_MIN_SAUDAVEL} d.`;
+        kw = dir || 'Reprimida'; txt = `a saída supera o estoque livre; cobertura abaixo de ${DIAS_MIN_SAUDAVEL} d e nada a caminho.`;
     } else if (r.veredito === 'abaixo') {
         kw = dir || 'Sobrando'; txt = `estoque sobrando para o giro; cobertura acima de ${DIAS_ENCALHADO} d.`;
     } else if (r.veredito === 'sem-giro') {
@@ -1913,6 +1920,7 @@ function explicacaoRitmo(p, r) {
 
     return `
     <div class="rec-memoria ritmo-memoria">
+        ${numsHtml}
         ${cobHtml}
         ${verdHtml}
         ${compraHtml}
