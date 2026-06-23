@@ -30,7 +30,8 @@ const MAX_DETALHE_CONFIRMA = 80;
 // Use '' (string vazia) para voltar a somar TODAS as reservas.
 const RESERVA_LIVRE = 'Regular';
 
-// Quantos dias de cobertura mirar nas sugestões de compra (PADRÃO para todas as linhas)
+// Quantos dias de cobertura mirar nas sugestões de compra (PADRÃO para todas as linhas).
+// 60 dias = 45 dias de serviço + 15 dias de lead time (faturamento na indústria → chegada no CD).
 const META_DIAS_COBERTURA = 60;
 const META_DIAS_MIN = 7;
 const META_DIAS_MAX = 365;
@@ -574,6 +575,9 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
             vendas: [0, 0, 0, 0, 0],
             vendasRS: [0, 0, 0, 0, 0],
             vendaMedia: 0, vendaMediaRS: 0,
+            // PROJEÇÃO UNDS (coluna AQ): venda do mês vigente extrapolada por dias úteis,
+            // já calculada pelo gerador da planilha. Base da posição projetada de fim de mês.
+            projecaoMes: 0,
 
             estoqueLivre: 0, estoqueQualidade: 0, estoqueBloqueado: 0, estoqueTotal: 0,
             estoqueLivreRS: 0, pendenciaTransito: 0, pendenciaEntrega: 0,
@@ -611,6 +615,7 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
         });
         o.vendaMedia += _num(row['Venda Média Ponderada']);
         o.vendaMediaRS += _num(row['Venda Média Ponderada R$']);
+        o.projecaoMes += _num(row['PROJEÇÃO UNDS']);
 
         o.estoqueLivre += _num(row['Estoque Livre']);
         o.estoqueQualidade += _num(row['Estoque Qualidade']);
@@ -1386,15 +1391,28 @@ function thOrdRec(key, label, align) {
 // Monta a memória de cálculo de um produto.
 // IMPORTANTE: vendaMedia é a VENDA MÉDIA MENSAL (Venda Média Ponderada da planilha),
 // não o giro diário. Cobrir N dias = N/30 meses de venda.
-// A sugestão desconta o estoque livre E o que já está a caminho (pendências de
-// trânsito e entrega), que são mercadoria comprada que vai entrar no CD.
+// RACIONAL (igual à coluna "Sugestão Compra" do mapa de estoque oficial): a sugestão
+// não desconta a foto de hoje, e sim a POSIÇÃO PROJETADA PARA O FIM DO MÊS — o estoque
+// total atual menos a saída que ainda resta no mês vigente (projeção cheia − já vendido).
+// O que está a caminho (trânsito + entrega) já entra porque está dentro do Estoque Total.
 function memoriaCompra(p, metaOverride) {
     const diasMeta = (typeof metaOverride === 'number' && metaOverride > 0) ? metaOverride : getMetaDias(p);
     const mesesCobertura = diasMeta / 30;
-    const necessario = Math.ceil(p.vendaMedia * mesesCobertura);
+    // Alvo de cobertura, em unidades: venda média ponderada × (dias meta ÷ 30). Sem
+    // arredondar aqui — o ajuste ao múltiplo de caixa vem no fim, igual ao mapa.
+    const necessario = p.vendaMedia * mesesCobertura;
     const aCaminho = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
-    const disponivelFuturo = p.estoqueLivre + aCaminho;
-    const comprarBruto = Math.max(0, necessario - disponivelFuturo);
+    // Projeção do mês vigente (un): usa a coluna PROJEÇÃO UNDS da planilha, que já traz a
+    // extrapolação por dias ÚTEIS embutida pelo gerador do arquivo. Se a coluna não vier,
+    // cai no projetado por dias corridos (venda parcial ÷ dia do mês × 30).
+    const projMes = (p.projecaoMes > 0) ? p.projecaoMes : p.vendaParcialProjetada;
+    // Saída que ainda resta até o fim do mês (projeção cheia − o já vendido no mês).
+    const restoMes = projMes - p.vendaParcial;
+    // Posição projetada para o fim do mês: Estoque Total de hoje (livre + qualidade +
+    // bloqueado + trânsito + entrega) menos a saída restante. É a base prospectiva que a
+    // sugestão desconta — não a foto atual de estoque livre.
+    const estoqueProjFim = p.estoqueTotal - restoMes;
+    const comprarBruto = Math.max(0, necessario - estoqueProjFim);
     // Arredonda PARA CIMA ao múltiplo da caixa de embarque (não se compra caixa fracionada)
     const mult = ajustarAoMultiplo(p, comprarBruto);
     let comprar = mult.ajustado;   // valor final usado em todo o dashboard
@@ -1402,24 +1420,26 @@ function memoriaCompra(p, metaOverride) {
     let pisoMinimo = false;
     // PISO DE 1 CAIXA DE EMBARQUE: produto em déficit COM necessidade líquida real
     // (comprarBruto > 0) nunca sugere menos que 1 caixa de embarque.
-    // SÓ se aplica quando ainda falta comprar algo. Se o estoque livre + o que já está
-    // a caminho (pendência) cobrem a meta (comprarBruto = 0), a sugestão fica 0 — não
-    // faz sentido mandar comprar 1 caixa de um item já coberto pela pendência.
+    // SÓ se aplica quando ainda falta comprar algo. Se a posição projetada de fim de mês
+    // já cobre a meta (comprarBruto = 0), a sugestão fica 0 — não faz sentido mandar
+    // comprar 1 caixa de um item que o estoque projetado já cobre.
     if (mult.temMultiplo && p.vendaMedia > 0 && p.status === 'deficit'
         && comprarBruto > 0 && comprar < mult.multiplo) {
         comprar = mult.multiplo;
         caixas = 1;
         pisoMinimo = true;
     }
-    // Média simples dos 4 meses cheios da janela (exclui o mês vigente parcial)
+    // Média simples dos meses cheios da janela (exclui o mês vigente parcial)
     const mediaMesesCheios = (p.vendas[0] + p.vendas[1] + p.vendas[2] + p.vendas[3]) / 4;
     const giroDia = p.vendaMedia / 30;
-    // cobertura futura (livre + a caminho), em dias
-    const diasFuturo = p.vendaMedia > 0 ? (disponivelFuturo / p.vendaMedia) * 30 : 0;
+    // cobertura da posição projetada de fim de mês, em dias
+    const diasFuturo = p.vendaMedia > 0 ? (estoqueProjFim / p.vendaMedia) * 30 : 0;
+    // disponivelFuturo mantido como alias de estoqueProjFim (base que a compra desconta)
     return {
         necessario, comprar, comprarBruto, diasMeta, pisoMinimo,
         multiplo: mult.multiplo, caixas, temMultiplo: mult.temMultiplo,
-        mediaMesesCheios, giroDia, mesesCobertura, aCaminho, disponivelFuturo, diasFuturo
+        mediaMesesCheios, giroDia, mesesCobertura, aCaminho,
+        projMes, restoMes, estoqueProjFim, disponivelFuturo: estoqueProjFim, diasFuturo
     };
 }
 
@@ -1432,31 +1452,27 @@ function vendasPorMesHtml(p) {
 
 // Texto da memória de cálculo da sugestão
 function explicacaoCompra(p) {
-    const { necessario, comprar, comprarBruto, multiplo, caixas, temMultiplo, mediaMesesCheios, giroDia, mesesCobertura, aCaminho, disponivelFuturo, diasFuturo, diasMeta, pisoMinimo } = memoriaCompra(p);
+    const { necessario, comprar, comprarBruto, multiplo, caixas, temMultiplo, mediaMesesCheios, giroDia, mesesCobertura, aCaminho, projMes, restoMes, estoqueProjFim, diasFuturo, diasMeta, pisoMinimo } = memoriaCompra(p);
     const mesesTxt = Number.isInteger(mesesCobertura) ? `${mesesCobertura} meses` : `${mesesCobertura.toFixed(1)} meses`;
+    const r = n => Math.round(n).toLocaleString('pt-BR');
+    // Rótulo dos meses cheios da janela (exclui o mês vigente parcial)
+    const mesesCheiosTxt = JANELA.slice(0, 4).map(m => m.cap).join('–');
 
-    const blocoCaminho = aCaminho > 0
-        ? ` Já a caminho (trânsito + entrega): <strong>${aCaminho.toLocaleString('pt-BR')} un</strong>, elevando o disponível para <strong>${disponivelFuturo.toLocaleString('pt-BR')} un</strong> (cobertura futura ≈ ${diasFuturo.toFixed(0)} dias).`
-        : '';
-
-    // Necessidade "crua" (pode ser negativa = já coberto pelo livre + a caminho)
-    const necessidadeRaw = necessario - disponivelFuturo;
     const jaCoberto = comprarBruto <= 0 && !pisoMinimo;
+    const caminhoNota = aCaminho > 0 ? ` (inclui ${r(aCaminho)} un a caminho — trânsito + entrega — já dentro do total)` : '';
 
     const formulaBruto = jaCoberto
-        ? `Necessidade líquida = ${necessario.toLocaleString('pt-BR')} − ${disponivelFuturo.toLocaleString('pt-BR')} (${p.estoqueLivre.toLocaleString('pt-BR')} livre + ${aCaminho.toLocaleString('pt-BR')} a caminho) = <strong>${necessidadeRaw.toLocaleString('pt-BR')} un</strong> → <strong style="color:var(--saudavel);">0 un a comprar</strong>. O disponível futuro já cobre a meta de ${diasMeta} dias (cobertura futura ≈ ${diasFuturo.toFixed(0)} dias).`
-        : (aCaminho > 0
-            ? `Necessidade líquida = ${necessario.toLocaleString('pt-BR')} − (${p.estoqueLivre.toLocaleString('pt-BR')} livre + ${aCaminho.toLocaleString('pt-BR')} a caminho) = <strong>${comprarBruto.toLocaleString('pt-BR')} un</strong>.`
-            : `Necessidade líquida = ${necessario.toLocaleString('pt-BR')} − ${p.estoqueLivre.toLocaleString('pt-BR')} = <strong>${comprarBruto.toLocaleString('pt-BR')} un</strong>.`);
+        ? `Necessidade líquida = ${r(necessario)} − ${r(estoqueProjFim)} = <strong>${r(necessario - estoqueProjFim)} un</strong> → <strong style="color:var(--saudavel);">0 un a comprar</strong>. A posição projetada de fim de mês já cobre a meta de ${diasMeta} dias (cobertura ≈ ${diasFuturo.toFixed(0)} dias).`
+        : `Necessidade líquida = ${r(necessario)} − ${r(estoqueProjFim)} = <strong>${r(comprarBruto)} un</strong>.`;
 
     // Ajuste ao múltiplo da caixa de embarque
     let blocoCaixa;
     if (jaCoberto) {
         blocoCaixa = ''; // já coberto: nada a comprar, sem arredondamento de caixa
     } else if (pisoMinimo) {
-        blocoCaixa = `Caixa de embarque = <strong>${multiplo.toLocaleString('pt-BR')} un</strong>. A necessidade líquida (${comprarBruto.toLocaleString('pt-BR')} un) é menor que 1 caixa, mas o item está em déficit — aplicado o <strong>mínimo de 1 caixa</strong> = <strong style="color:var(--primary);">${comprar.toLocaleString('pt-BR')} un</strong>.`;
+        blocoCaixa = `Caixa de embarque = <strong>${multiplo.toLocaleString('pt-BR')} un</strong>. A necessidade líquida (${r(comprarBruto)} un) é menor que 1 caixa, mas o item está em déficit — aplicado o <strong>mínimo de 1 caixa</strong> = <strong style="color:var(--primary);">${comprar.toLocaleString('pt-BR')} un</strong>.`;
     } else if (temMultiplo) {
-        blocoCaixa = `Caixa de embarque = <strong>${multiplo.toLocaleString('pt-BR')} un</strong>. Arredondando para cima: ${comprarBruto.toLocaleString('pt-BR')} ÷ ${multiplo.toLocaleString('pt-BR')} → <strong>${caixas.toLocaleString('pt-BR')} ${caixas === 1 ? 'caixa' : 'caixas'}</strong> = <strong style="color:var(--primary);">${comprar.toLocaleString('pt-BR')} un</strong>.`;
+        blocoCaixa = `Caixa de embarque = <strong>${multiplo.toLocaleString('pt-BR')} un</strong>. Arredondando para cima: ${r(comprarBruto)} ÷ ${multiplo.toLocaleString('pt-BR')} → <strong>${caixas.toLocaleString('pt-BR')} ${caixas === 1 ? 'caixa' : 'caixas'}</strong> = <strong style="color:var(--primary);">${comprar.toLocaleString('pt-BR')} un</strong>.`;
     } else {
         blocoCaixa = `<span style="color:var(--excesso);">⚠ SAP ${escapeHtml(String(p.codigoSAP))} sem múltiplo de caixa cadastrado — sugestão sem arredondamento: <strong>${comprar.toLocaleString('pt-BR')} un</strong>.</span>`;
     }
@@ -1469,12 +1485,13 @@ function explicacaoCompra(p) {
             </div>
             <div class="rec-memoria-calc">
                 <span class="rec-memoria-label">Por que ${comprar.toLocaleString('pt-BR')} un:</span>
-                Venda média de <strong>${p.vendaMedia.toLocaleString('pt-BR')} un/mês</strong> (média ponderada; média simples Fev–Mai = ${Math.round(mediaMesesCheios).toLocaleString('pt-BR')} un/mês ≈ ${giroDia.toFixed(0)} un/dia).
-                Para cobrir <strong>${diasMeta} dias (${mesesTxt})</strong>: ${p.vendaMedia.toLocaleString('pt-BR')} × ${mesesCobertura.toFixed(mesesCobertura % 1 ? 1 : 0)} = <strong>${necessario.toLocaleString('pt-BR')} un</strong> necessárias.
-                Estoque livre atual <strong>${p.estoqueLivre.toLocaleString('pt-BR')} un</strong>.${blocoCaminho}
+                Venda média de <strong>${p.vendaMedia.toLocaleString('pt-BR')} un/mês</strong> (média ponderada; média simples ${mesesCheiosTxt} = ${r(mediaMesesCheios)} un/mês ≈ ${giroDia.toFixed(0)} un/dia).
+                Para cobrir <strong>${diasMeta} dias (${mesesTxt})</strong>: ${p.vendaMedia.toLocaleString('pt-BR')} × ${mesesCobertura.toFixed(mesesCobertura % 1 ? 1 : 0)} = <strong>${r(necessario)} un</strong> necessárias.
+                ${mesVigenteNome()} projetado em <strong>${r(projMes)} un</strong> (parcial ${p.vendaParcial.toLocaleString('pt-BR')} un até dia ${dashboardData.diasCorridos}); ainda saem <strong>${r(restoMes)} un</strong> até o fim do mês.
+                Estoque total hoje <strong>${p.estoqueTotal.toLocaleString('pt-BR')} un</strong>${caminhoNota} → posição projetada de fim de mês = ${p.estoqueTotal.toLocaleString('pt-BR')} − ${r(restoMes)} = <strong>${r(estoqueProjFim)} un</strong> (cobertura ≈ ${diasFuturo.toFixed(0)} dias).
                 ${formulaBruto}
                 ${blocoCaixa}
-                <span class="jun-nota">* ${mesVigenteNome()} parcial até dia ${dashboardData.diasCorridos} (projeção mês cheio ≈ ${Math.round(p.vendaParcialProjetada).toLocaleString('pt-BR')} un).</span>
+                <span class="jun-nota">* Projeção do mês vigente pela coluna PROJEÇÃO UNDS da planilha (extrapolação por dias úteis).</span>
             </div>
         </div>`;
 }
@@ -1797,7 +1814,7 @@ function renderRitmoKpis(k, sc) {
 
 function ritmoZona(d) { return d < DIAS_MIN_SAUDAVEL ? 'acima' : d <= RITMO_TETO_DIAS ? 'ritmo' : 'abaixo'; }
 const RITMO_COR = { acima: 'var(--deficit)', ritmo: 'var(--saudavel)', abaixo: 'var(--excesso)' };
-const RITMO_META_DIAS = 45;   // meta da sugestão de compra NESTA visão (alinhada à linha de alerta de 45 d). A aba de Sugestões segue em 60.
+const RITMO_META_DIAS = 45;   // meta da sugestão de compra NESTA visão (alinhada à linha de alerta de 45 d e à meta padrão da aba de Sugestões).
 
 // Formatos compactos para a leitura direta
 function fmtMult(m) {
@@ -1863,15 +1880,14 @@ function renderRitmoTable(lista, hideCD, sc) {
                     ${repoQtd}
                 </div>`;
 
-        // Compra (coluna da direita): a sugestão, sempre em azul. Mesma conta de antes (meta de
-        // 45 dias, já descontando livre + a caminho). Zero fica apagado.
+        // Compra (coluna da direita): a sugestão, sempre em azul. Mesma conta da aba Sugestões
+        // (meta de 45 dias, descontando a posição projetada de fim de mês). Zero fica apagado.
         const mc = memoriaCompra(p, RITMO_META_DIAS);
         const compra = mc.comprar || 0;
+        const projFimTxt = Math.round(mc.estoqueProjFim).toLocaleString('pt-BR');
         const compraTip = compra > 0
-            ? `Comprar para ${mc.diasMeta} dias, já descontado ${(p.estoqueLivre || 0).toLocaleString('pt-BR')} livre${r.aCaminho > 0 ? ' + ' + r.aCaminho.toLocaleString('pt-BR') + ' a caminho' : ''}.`
-            : (r.veredito === 'acima' && r.aCaminho > 0
-                ? `O que vem a caminho (${r.aCaminho.toLocaleString('pt-BR')} un) já cobre a meta de ${mc.diasMeta} dias.`
-                : `Cobertura já na meta de ${mc.diasMeta} dias.`);
+            ? `Comprar para ${mc.diasMeta} dias, descontada a posição projetada de fim de mês (${projFimTxt} un = estoque total − saída restante).`
+            : `Posição projetada de fim de mês (${projFimTxt} un) já cobre a meta de ${mc.diasMeta} dias.`;
         const buyHtml = compra > 0
             ? `<div class="ritmo-rbuy" title="${compraTip}"><b>${compra.toLocaleString('pt-BR')}</b><i>un</i></div>`
             : `<div class="ritmo-rbuy zero" title="${compraTip}"><b>0</b></div>`;
@@ -1952,9 +1968,9 @@ function explicacaoRitmo(p, r) {
     }
     const verdHtml = `<div class="rit-verd" style="border-left-color:${cor};"><b style="color:${cor};">${kw}</b> · ${txt}</div>`;
 
-    // 3) Compra: a conta inteira em uma linha (já descontando livre + a caminho).
+    // 3) Compra: a conta inteira em uma linha (descontando a projeção de fim de mês).
     const mc = memoriaCompra(p, RITMO_META_DIAS);
-    const base = `meta ${mc.diasMeta} d → ${fmt(mc.necessario)} un · tem ${fmt(mc.disponivelFuturo)} (${fmt(p.estoqueLivre)}+${fmt(mc.aCaminho)})`;
+    const base = `meta ${mc.diasMeta} d → ${fmt(mc.necessario)} un · projeção fim do mês ${fmt(mc.estoqueProjFim)} (total ${fmt(p.estoqueTotal)} − ${fmt(mc.restoMes)} resto)`;
     let compraV;
     if (mc.comprar <= 0) {
         compraV = `${base} · <strong style="color:var(--saudavel);">0 a comprar</strong>`;
