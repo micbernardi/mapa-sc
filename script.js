@@ -2889,6 +2889,11 @@ function produtosCockpit() {
 function agregarNumeros(prods) {
     let recompraRS = 0, recompraUn = 0, itensCompra = 0;
     let capTotal = 0, capAtencao = 0, capProblema = 0, capCompra = 0;
+    // Itens que ainda precisam de PEDIDO NOVO para bater a meta de 45 dias. Mesma conta da
+    // aba Sugestões (filtro "deficit"): população < 60d (deficit/saudavel/reposicao) com
+    // comprar > 0. compraDef = já em déficit (< 45d); compra4560 = ainda 45-60d mas a
+    // projeção de fim de mês cai abaixo de 45d. reposicao tem comprar 0 (já coberto).
+    let compraNec = 0, compraDef = 0, compra4560 = 0;
     const cont = { deficit: 0, saudavel: 0, reposicao: 0, excesso: 0, 'sem-giro': 0 };
     prods.forEach(p => {
         capTotal += p.estoqueLivreRS;
@@ -2897,9 +2902,16 @@ function agregarNumeros(prods) {
         if (p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao') capCompra += p.estoqueLivreRS;
         cont[p.status] = (cont[p.status] || 0) + 1;
         const r = recompraDe(p);
-        if (r.un > 0) { recompraRS += r.rs; recompraUn += r.un; itensCompra++; }
+        if (r.un > 0) {
+            recompraRS += r.rs; recompraUn += r.un; itensCompra++;
+            if (p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao') {
+                compraNec++;
+                if (p.status === 'deficit') compraDef++;
+                else if (p.status === 'saudavel') compra4560++;
+            }
+        }
     });
-    return { recompraRS, recompraUn, itensCompra, capTotal, capAtencao, capProblema, capCompra, cont, n: prods.length };
+    return { recompraRS, recompraUn, itensCompra, capTotal, capAtencao, capProblema, capCompra, compraNec, compraDef, compra4560, cont, n: prods.length };
 }
 
 // Recompra represada por faixa de status (quem dispara o pedido).
@@ -3329,9 +3341,9 @@ function updateCockpit() {
                 ${deltaCard(!filtrado, a.capAtencao, cmpAnterior && cmpAnterior.totais.capAtencao, true)}
             </div>
             <div class="cockpit-card cockpit-card-link" data-goto="compra">
-                <div class="cockpit-card-val">${(a.cont.deficit + a.cont.saudavel + a.cont.reposicao).toLocaleString('pt-BR')}</div>
-                <div class="cockpit-card-lbl">Itens com necessidade de compra (&lt; 60 dias)</div>
-                <div class="cockpit-card-meta">déficit ${a.cont.deficit.toLocaleString('pt-BR')} · 45–60d ${a.cont.saudavel.toLocaleString('pt-BR')} · em reposição ${a.cont.reposicao.toLocaleString('pt-BR')}</div>
+                <div class="cockpit-card-val">${a.compraNec.toLocaleString('pt-BR')}</div>
+                <div class="cockpit-card-lbl">Itens com necessidade de compra (meta 45 dias)</div>
+                <div class="cockpit-card-meta">déficit &lt; 45d ${a.compraDef.toLocaleString('pt-BR')} · 45–60d projetando queda ${a.compra4560.toLocaleString('pt-BR')} · + ${(a.cont.deficit + a.cont.saudavel + a.cont.reposicao - a.compraNec).toLocaleString('pt-BR')} já com reposição a caminho</div>
             </div>
             <div class="cockpit-card">
                 <div class="cockpit-card-val">${formatBRLCheio(a.capTotal)}</div>
