@@ -31,10 +31,17 @@ const MAX_DETALHE_CONFIRMA = 80;
 const RESERVA_LIVRE = 'Regular';
 
 // Quantos dias de cobertura mirar nas sugestões de compra (PADRÃO para todas as linhas).
-// 60 dias = 45 dias de serviço + 15 dias de lead time (faturamento na indústria → chegada no CD).
-const META_DIAS_COBERTURA = 60;
+// 45 dias de cobertura-alvo. O cálculo já desconta o que vem a caminho (trânsito +
+// entrega), pois a posição projetada de fim de mês parte do Estoque Total, que inclui
+// as pendências de entrega. Ajustável por linha nas abas Sugestões e Detalhes.
+const META_DIAS_COBERTURA = 45;
 const META_DIAS_MIN = 7;
 const META_DIAS_MAX = 365;
+
+// Meta FIXA usada nas comparações entre bases (Cockpit, "O que mudou", deltas por CD).
+// O retrato de cada base é sempre congelado nesta meta, independente da meta que estiver
+// na tela, para que duas bases nunca sejam comparadas em prazos diferentes.
+const META_REF_COMPARATIVO = 45;
 
 // Tolerância do arredondamento por caixa de embarque (fração de 1 caixa).
 // A compra é arredondada PARA CIMA ao múltiplo da caixa, MAS uma caixa extra só é
@@ -179,6 +186,8 @@ if (ritmoViewSel) ritmoViewSel.addEventListener('change', () => {
 if (ritmoSort) ritmoSort.addEventListener('change', updateRitmo);
 const cdSalesSelectEl = document.getElementById('cdSalesSelect');
 if (cdSalesSelectEl) cdSalesSelectEl.addEventListener('change', renderVendasCDDetalhe);
+const mapaCdSortEl = document.getElementById('mapaCdSort');
+if (mapaCdSortEl) mapaCdSortEl.addEventListener('change', updateMapaCD);
 
 // --- Multi-seleção global (espelhada em várias abas) ---
 const MS_STATUS_LABEL = {
@@ -186,7 +195,9 @@ const MS_STATUS_LABEL = {
     saudavel: 'Necessidade de compra (45-60 dias)',
     reposicao: 'Em reposição (coberto pelo que vem)',
     excesso: 'Atenção (60-100 dias)',
-    'sem-giro': 'Problema (> 100 dias)'
+    'sem-giro': 'Problema (> 100 dias)',
+    'sem-sinal': 'Sem sinal de venda',
+    'parado': 'Parado (sem giro recente)'
 };
 // Várias chaves apontam para o MESMO conjunto global (ex.: cd, prodCd e recCd = filtroCD).
 const MS_FILTROS = {
@@ -194,13 +205,11 @@ const MS_FILTROS = {
     prodCd:   { set: filtroCD,     toggle: 'msProdCdToggle',   drop: 'msProdCdDrop',   opts: 'msProdCdOpts',   vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
     recCd:    { set: filtroCD,     toggle: 'msRecCdToggle',    drop: 'msRecCdDrop',    opts: 'msRecCdOpts',    vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
     ritmoCd:  { set: filtroCD,     toggle: 'msRitmoCdToggle',  drop: 'msRitmoCdDrop',  opts: 'msRitmoCdOpts',  vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: ritmoCdChange },
-    curva:    { set: filtroCurva,  toggle: 'msCurvaToggle',    drop: 'msCurvaDrop',    opts: 'msCurvaOpts',    vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v,            plural: n => n + ' curvas', onChange: aplicarTudo },
-    recCurva: { set: filtroCurva,  toggle: 'msRecCurvaToggle', drop: 'msRecCurvaDrop', opts: 'msRecCurvaOpts', vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v,            plural: n => n + ' curvas', onChange: aplicarTudo },
-    ritmoCurva: { set: filtroCurva, toggle: 'msRitmoCurvaToggle', drop: 'msRitmoCurvaDrop', opts: 'msRitmoCurvaOpts', vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v,         plural: n => n + ' curvas', onChange: aplicarTudo },
+    globalCurva: { set: filtroCurva, toggle: 'msGlobalCurvaToggle', drop: 'msGlobalCurvaDrop', opts: 'msGlobalCurvaOpts', vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v, plural: n => n + ' curvas', onChange: aplicarTudo },
     status:   { set: filtroStatus, toggle: 'msStatusToggle',   drop: 'msStatusDrop',   opts: 'msStatusOpts',   vazio: 'Todos',           rotulo: v => MS_STATUS_LABEL[v] || v, plural: n => n + ' status', onChange: aplicarTudo }
 };
 const MS_CD_KEYS = ['cd', 'prodCd', 'recCd', 'ritmoCd'];
-const MS_CURVA_KEYS = ['curva', 'recCurva', 'ritmoCurva'];
+const MS_CURVA_KEYS = ['curva', 'recCurva', 'ritmoCurva', 'mapaCurva'];
 
 // Aplica e sincroniza TUDO quando qualquer filtro global muda
 function aplicarTudo() {
@@ -210,6 +219,9 @@ function aplicarTudo() {
     atualizarDetalhes();     // Detalhes
     renderVendasCD();        // Vendas do CD
     updateRitmo();           // Ritmo Entrada × Saída
+    updateCockpit();         // Cockpit
+    updateMapaCD();          // Mapa por CD
+    updateGargalo();         // Gargalo por CD
 }
 
 // Marcar um CD específico no seletor do Ritmo descarta a intenção de "ver SC":
@@ -291,11 +303,9 @@ function setupFiltrosMulti() {
         drop.addEventListener('click', e => e.stopPropagation());
     });
     document.addEventListener('click', msFechaTodos);
-    // Opções fixas de Curva (Visão Geral e Sugestões); CD entra em populateFilters
+    // Opções fixas de Curva (filtro global, vale para todas as abas)
     const curvas = [{ value: 'A', label: 'Curva A' }, { value: 'B', label: 'Curva B' }, { value: 'C', label: 'Curva C' }];
-    msMontaOpcoes('curva', curvas);
-    msMontaOpcoes('recCurva', curvas);
-    msMontaOpcoes('ritmoCurva', curvas);
+    msMontaOpcoes('globalCurva', curvas);
     msMontaOpcoes('status', [
         { value: 'deficit', label: MS_STATUS_LABEL.deficit },
         { value: 'saudavel', label: MS_STATUS_LABEL.saudavel },
@@ -400,16 +410,74 @@ function ativarAba(tabId) {
 // ============================================
 const IDB_DB = 'santacruz-dashboard';
 const IDB_STORE = 'arquivo';
+const IDB_SNAPS = 'snapshots';   // histórico compacto por data-base (para a aba "O que mudou")
 const IDB_KEY = 'planilha';
 const LS_NOME = 'sc_nome_arquivo';
+const MAX_SNAPSHOTS = 12;         // mantém os 12 retratos mais recentes (um por data-base)
 
 function idbOpen() {
     return new Promise((resolve, reject) => {
-        const req = indexedDB.open(IDB_DB, 1);
-        req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+        // v2: acrescenta o store de snapshots (o store 'arquivo' é preservado).
+        const req = indexedDB.open(IDB_DB, 2);
+        req.onupgradeneeded = (e) => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+            if (!db.objectStoreNames.contains(IDB_SNAPS)) db.createObjectStore(IDB_SNAPS, { keyPath: 'dataKey' });
+        };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
     });
+}
+// Salva (ou sobrescreve) o retrato de uma data-base e poda o histórico ao limite.
+async function snapSalvar(snap) {
+    if (!snap) return;
+    try {
+        const db = await idbOpen();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_SNAPS, 'readwrite');
+            tx.objectStore(IDB_SNAPS).put(snap);
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+        // Poda: mantém só os MAX_SNAPSHOTS mais recentes por dataKey
+        const todos = await snapListar();
+        if (todos.length > MAX_SNAPSHOTS) {
+            const apagar = todos.slice(0, todos.length - MAX_SNAPSHOTS).map(s => s.dataKey);
+            await new Promise((resolve) => {
+                const tx = db.transaction(IDB_SNAPS, 'readwrite');
+                apagar.forEach(k => tx.objectStore(IDB_SNAPS).delete(k));
+                tx.oncomplete = resolve;
+                tx.onerror = resolve;
+            });
+        }
+        db.close();
+    } catch (e) { console.warn('Não foi possível salvar o retrato da base:', e); }
+}
+// Lista todos os retratos ordenados por data-base (mais antigo → mais recente).
+async function snapListar() {
+    try {
+        const db = await idbOpen();
+        const lista = await new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_SNAPS, 'readonly');
+            const req = tx.objectStore(IDB_SNAPS).getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+        });
+        db.close();
+        return lista.sort((a, b) => (a.dataKey < b.dataKey ? -1 : a.dataKey > b.dataKey ? 1 : 0));
+    } catch (e) { console.warn('Não foi possível ler o histórico de bases:', e); return []; }
+}
+async function snapApagarTudo() {
+    try {
+        const db = await idbOpen();
+        await new Promise((resolve) => {
+            const tx = db.transaction(IDB_SNAPS, 'readwrite');
+            tx.objectStore(IDB_SNAPS).clear();
+            tx.oncomplete = resolve;
+            tx.onerror = resolve;
+        });
+        db.close();
+    } catch (e) { /* silencioso */ }
 }
 async function idbSalvar(buffer) {
     try {
@@ -470,6 +538,7 @@ function carregarPlanilha(buffer, nomeArquivo) {
     fileInput.value = '';
     populateFilters();
     updateAllVisualizations();
+    sincronizarHistorico();   // monta o retrato da base, compara com a anterior e redesenha Cockpit + "O que mudou"
     console.log('Dashboard carregado:', originalProducts.length, 'produtos');
 }
 
@@ -665,7 +734,24 @@ function finalizarProduto(p) {
     p.vendaParcialRS = p.vendasRS[4];
     p.vendaParcialProjetada = p.diasCorridos > 0 ? (p.vendaParcial / p.diasCorridos) * 30 : p.vendaParcial;
 
-    p.status = classificar(p.diasLivre);
+    // Venda média ponderada <= 0 não é déficit: é AUSÊNCIA DE SINAL. Acontece quando a
+    // janela só tem devolução (média negativa, ex.: BA03) ou nenhuma venda na reserva
+    // Regular (média zero, com ou sem estoque parado). Sem demanda positiva os "dias de
+    // cobertura" ficam indefinidos (a planilha devolve 0), e 0 < 45 jogava esses pontos em
+    // 'deficit' por engano. memoriaCompra já sugere 0 para eles (necessário <= 0), então
+    // marcá-los como 'sem-sinal' não altera nenhuma compra: só remove o falso vermelho.
+    p.status = p.vendaMedia > 0 ? classificar(p.diasLivre) : 'sem-sinal';
+
+    // GIRO RECENTE: vendeu no último mês cheio (vendas[3]=mai) OU no parcial corrente
+    // (vendas[4]=jun). Cobertura baixa (déficit/saudável) SEM giro recente não é necessidade
+    // de compra: é ponto PARADO. A média ponderada ainda positiva é histórico que não se
+    // repete (ex.: ATIP no RS13, vendeu fev/mar e zerou). Vira 'parado' e não dispara pedido.
+    // Pontos com estoque alto seguem em excesso/encalhado (a foto já diz "sobra"); só os de
+    // cobertura baixa, que disparariam compra à toa, são reclassificados aqui.
+    const giroRecente = (p.vendas[3] + p.vendas[4]) > 0;
+    if (p.vendaMedia > 0 && !giroRecente && (p.status === 'deficit' || p.status === 'saudavel')) {
+        p.status = 'parado';
+    }
 
     // Reconcilia o status de COMPRA com o que já está a caminho (pendência de
     // trânsito + entrega = mercadoria comprada que vai entrar no CD). Um item com
@@ -840,7 +926,7 @@ function consolidate(products, nomeArquivo, diasCorridos) {
                 estoqueLivreTotal: 0,
                 estoqueLivreRSTotal: 0,
                 vendaMediaTotal: 0,
-                deficit: 0, saudavel: 0, reposicao: 0, excesso: 0, semGiro: 0
+                deficit: 0, saudavel: 0, reposicao: 0, excesso: 0, semGiro: 0, semSinal: 0, parado: 0
             };
         }
         const c = cdMap[p.cd];
@@ -853,6 +939,8 @@ function consolidate(products, nomeArquivo, diasCorridos) {
         else if (p.status === 'reposicao') c.reposicao++;
         else if (p.status === 'excesso') c.excesso++;
         else if (p.status === 'sem-giro') c.semGiro++;
+        else if (p.status === 'sem-sinal') c.semSinal++;
+        else if (p.status === 'parado') c.parado++;
     });
 
     // Dias médios PONDERADOS: estoque livre total / venda média total * 30
@@ -888,7 +976,7 @@ function clearDashboard() {
     filtroCurva.clear();
     filtroStatus.clear();
     msMontaOpcoes('cd', []);
-    msSincroniza('curva');
+    msSincroniza('globalCurva');
     msSincroniza('status');
     fileInput.value = '';
     fileName.textContent = 'Selecionar Planilha Excel';
@@ -922,7 +1010,7 @@ function clearDashboard() {
     filtroCurva.clear();
     filtroStatus.clear();
     ['cd', 'prodCd', 'recCd', 'ritmoCd'].forEach(q => msMontaOpcoes(q, []));
-    msSincroniza('curva'); msSincroniza('recCurva'); msSincroniza('ritmoCurva'); msSincroniza('status');
+    msSincroniza('globalCurva'); msSincroniza('status');
     productSearch.value = '';
     // Detalhes
     detailCDs.clear();
@@ -939,6 +1027,17 @@ function clearDashboard() {
     document.getElementById('noDetailSelected').textContent = 'Selecione ao menos um produto para ver detalhes';
     const af = document.getElementById('activeFilters');
     if (af) { af.style.display = 'none'; af.innerHTML = ''; }
+
+    // Telas novas: Cockpit, Mapa por CD, O que mudou
+    cmpAtual = null;
+    cmpAnterior = null;
+    snapApagarTudo();   // "Limpar Dados" zera também o histórico de comparação
+    const ckp = document.getElementById('cockpitContent');
+    if (ckp) ckp.innerHTML = '<div class="empty-state">Carregue uma planilha para abrir o cockpit.</div>';
+    const mcd = document.getElementById('mapaCdContent');
+    if (mcd) mcd.innerHTML = '<div class="empty-state">Carregue uma planilha para ver o ranking de CDs.</div>';
+    const mud = document.getElementById('mudancasContent');
+    if (mud) mud.innerHTML = '<div class="empty-state">Carregue uma planilha para comparar com a base anterior.</div>';
 }
 
 // ============================================
@@ -1002,7 +1101,7 @@ function updateActiveFilters() {
     if (!bar) return;
 
     const chips = [];
-    const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Necessidade de compra (45-60)', reposicao: 'Em reposição (a caminho)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)' };
+    const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Necessidade de compra (45-60)', reposicao: 'Em reposição (a caminho)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)', 'sem-sinal': 'Sem sinal de venda', 'parado': 'Parado (sem giro recente)' };
 
     filtroCD.forEach(v => chips.push({ k: 'cd', v, txt: 'CD: ' + v }));
     filtroCurva.forEach(v => chips.push({ k: 'curva', v, txt: 'Curva ' + v }));
@@ -1051,6 +1150,9 @@ function updateAllVisualizations() {
     updateRecommendations();
     renderVendasCD();
     updateRitmo();
+    updateCockpit();
+    updateMapaCD();
+    updateGargalo();
 }
 
 function updateViewHint() {
@@ -1121,9 +1223,9 @@ function updateProductsTable() {
             <td title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 36)}</td>
             <td>${aCaminho > 0 ? aCaminho.toLocaleString('pt-BR') : '<span style="color:var(--text-secondary);">—</span>'}</td>
             <td><span class="curva-badge curva-${p.curva}">${p.curva}</span></td>
-            <td>${p.vendaMedia.toFixed(1)}</td>
-            <td>${p.estoqueLivre.toFixed(0)}</td>
-            <td><strong>${Math.round(p.diasLivre)}</strong></td>
+            <td>${fmtUn(p.vendaMedia, 1)}</td>
+            <td>${fmtUn(p.estoqueLivre)}</td>
+            <td><strong>${fmtUn(p.diasLivre)}</strong></td>
             <td><span class="status-badge ${statusGrupo(p.status)}">${formatStatus(p.status)}</span></td>
         </tr>
     `;
@@ -1257,6 +1359,8 @@ function updateCDAnalysis() {
                 ${c.reposicao > 0 ? `<span class="status-badge reposicao" title="Em reposição: estoque livre baixo, mas já coberto pelo que está a caminho">${c.reposicao} reposição</span>` : ''}
                 <span class="status-badge excesso" title="Atenção (60-100 dias)">${c.excesso} atenção</span>
                 ${c.semGiro > 0 ? `<span class="status-badge sem-giro" title="Problema (>100 dias)">${c.semGiro} problema</span>` : ''}
+                ${c.semSinal > 0 ? `<span class="status-badge sem-sinal" title="Sem sinal de venda (média ponderada <= 0)">${c.semSinal} sem sinal</span>` : ''}
+                ${c.parado > 0 ? `<span class="status-badge parado" title="Parado: vendeu na janela mas sem giro no último mês cheio nem no parcial">${c.parado} parado</span>` : ''}
             </div>
         </div>`;
     }).join('');
@@ -1429,6 +1533,13 @@ function memoriaCompra(p, metaOverride) {
         caixas = 1;
         pisoMinimo = true;
     }
+    // SEM GIRO RECENTE: zero venda no último mês cheio (vendas[3]) e no parcial (vendas[4]).
+    // A média ponderada ainda positiva é histórico que não se repete; não justifica reabastecer
+    // um item que parou de vender (ex.: ATIP no RS13). Zera a sugestão qualquer que seja o
+    // tamanho da necessidade — inclusive acima de 1 caixa — para não comprar item parado. O
+    // ponto vira 'parado' na classificação; aqui garante-se que a recompra também é zero.
+    const semGiroRecente = p.vendaMedia > 0 && (p.vendas[3] + p.vendas[4]) <= 0;
+    if (semGiroRecente) { comprar = 0; caixas = 0; pisoMinimo = false; }
     // Média simples dos meses cheios da janela (exclui o mês vigente parcial)
     const mediaMesesCheios = (p.vendas[0] + p.vendas[1] + p.vendas[2] + p.vendas[3]) / 4;
     const giroDia = p.vendaMedia / 30;
@@ -1436,7 +1547,7 @@ function memoriaCompra(p, metaOverride) {
     const diasFuturo = p.vendaMedia > 0 ? (estoqueProjFim / p.vendaMedia) * 30 : 0;
     // disponivelFuturo mantido como alias de estoqueProjFim (base que a compra desconta)
     return {
-        necessario, comprar, comprarBruto, diasMeta, pisoMinimo,
+        necessario, comprar, comprarBruto, diasMeta, pisoMinimo, semGiroRecente,
         multiplo: mult.multiplo, caixas, temMultiplo: mult.temMultiplo,
         mediaMesesCheios, giroDia, mesesCobertura, aCaminho,
         projMes, restoMes, estoqueProjFim, disponivelFuturo: estoqueProjFim, diasFuturo
@@ -1452,7 +1563,7 @@ function vendasPorMesHtml(p) {
 
 // Texto da memória de cálculo da sugestão
 function explicacaoCompra(p) {
-    const { necessario, comprar, comprarBruto, multiplo, caixas, temMultiplo, mediaMesesCheios, giroDia, mesesCobertura, aCaminho, projMes, restoMes, estoqueProjFim, diasFuturo, diasMeta, pisoMinimo } = memoriaCompra(p);
+    const { necessario, comprar, comprarBruto, multiplo, caixas, temMultiplo, mediaMesesCheios, giroDia, mesesCobertura, aCaminho, projMes, restoMes, estoqueProjFim, diasFuturo, diasMeta, pisoMinimo, semGiroRecente } = memoriaCompra(p);
     const mesesTxt = Number.isInteger(mesesCobertura) ? `${mesesCobertura} meses` : `${mesesCobertura.toFixed(1)} meses`;
     const r = n => Math.round(n).toLocaleString('pt-BR');
     // Rótulo dos meses cheios da janela (exclui o mês vigente parcial)
@@ -1467,7 +1578,9 @@ function explicacaoCompra(p) {
 
     // Ajuste ao múltiplo da caixa de embarque
     let blocoCaixa;
-    if (jaCoberto) {
+    if (semGiroRecente) {
+        blocoCaixa = `Sem venda no último mês cheio (${JANELA[3].cap}) nem no parcial (${JANELA[4].cap}): item <strong>parado</strong>, sem giro recente. A média ponderada (${p.vendaMedia.toLocaleString('pt-BR')} un/mês) é histórico que não se repete — <strong style="color:var(--saudavel);">0 un a comprar</strong>. Reavaliar quando voltar a vender.`;
+    } else if (jaCoberto) {
         blocoCaixa = ''; // já coberto: nada a comprar, sem arredondamento de caixa
     } else if (pisoMinimo) {
         blocoCaixa = `Caixa de embarque = <strong>${multiplo.toLocaleString('pt-BR')} un</strong>. A necessidade líquida (${r(comprarBruto)} un) é menor que 1 caixa, mas o item está em déficit — aplicado o <strong>mínimo de 1 caixa</strong> = <strong style="color:var(--primary);">${comprar.toLocaleString('pt-BR')} un</strong>.`;
@@ -1507,7 +1620,7 @@ function renderRecTable(lista, filter, hideCD) {
             ? `<div style="font-size:0.72rem;color:var(--text-secondary);">${caixas} ${caixas === 1 ? 'cx' : 'cx'} × ${multiplo}</div>`
             : (temMultiplo ? '' : `<div style="font-size:0.7rem;color:var(--excesso);">sem múltiplo</div>`);
         const acaoCol = isExcesso
-            ? `<span style="color:var(--excesso);font-weight:600;">${p.estoqueLivre.toFixed(0)} un</span>`
+            ? `<span style="color:var(--excesso);font-weight:600;">${fmtUn(p.estoqueLivre)} un</span>`
             : `<strong style="color:var(--primary);">${comprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}`;
         const caminhoCol = aCaminho > 0
             ? `<span style="color:#0891b2;font-weight:600;">${aCaminho.toLocaleString('pt-BR')}</span>`
@@ -1523,7 +1636,7 @@ function renderRecTable(lista, filter, hideCD) {
             <td title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 34)} <span class="rec-expand" id="recexp-${idx}">▸</span></td>
             <td><span class="curva-badge curva-${p.curva}">${p.curva}</span></td>
             <td style="text-align:right;">${p.vendaMedia.toLocaleString('pt-BR')}</td>
-            <td style="text-align:right;">${p.estoqueLivre.toFixed(0)}</td>
+            <td style="text-align:right;">${fmtUn(p.estoqueLivre)}</td>
             <td style="text-align:right;">${caminhoCol}</td>
             <td style="text-align:right;"><span class="status-badge ${statusGrupo(p.status)}" style="padding:0.2rem 0.5rem;">${dias}</span></td>
             ${metaCol}
@@ -2268,7 +2381,7 @@ function renderDetailList(pontos) {
             <td><strong>${p.cd}</strong></td>
             <td><span class="curva-badge curva-${p.curva}">${p.curva}</span></td>
             <td style="text-align:right;">${p.vendaMedia.toLocaleString('pt-BR')}</td>
-            <td style="text-align:right;">${p.estoqueLivre.toFixed(0)}</td>
+            <td style="text-align:right;">${fmtUn(p.estoqueLivre)}</td>
             <td style="text-align:right;" title="Pendência de trânsito + entrega (a caminho)">${pendCol}</td>
             <td style="text-align:right;"><span class="status-badge ${statusGrupo(p.status)}" style="padding:0.2rem 0.5rem;">${dias}</span></td>
             <td style="text-align:center;" onclick="event.stopPropagation()">${metaCol}</td>
@@ -2374,12 +2487,12 @@ function detailBlockHtml(p) {
             <div class="detail-section">
                 <h4>📈 Estoques</h4>
                 <ul>
-                    <li><span class="label">Estoque Livre:</span> <span class="value">${p.estoqueLivre.toFixed(0)} un</span></li>
-                    <li><span class="label">Estoque Qualidade:</span> <span class="value">${p.estoqueQualidade.toFixed(0)} un</span></li>
-                    <li><span class="label">Estoque Bloqueado:</span> <span class="value">${p.estoqueBloqueado.toFixed(0)} un</span></li>
-                    <li><span class="label">Estoque Total:</span> <span class="value">${p.estoqueTotal.toFixed(0)} un</span></li>
-                    <li><span class="label">Pendência Trânsito:</span> <span class="value">${p.pendenciaTransito.toFixed(0)} un</span></li>
-                    <li><span class="label">Pendência Entrega:</span> <span class="value">${p.pendenciaEntrega.toFixed(0)} un</span></li>
+                    <li><span class="label">Estoque Livre:</span> <span class="value">${fmtUn(p.estoqueLivre)} un</span></li>
+                    <li><span class="label">Estoque Qualidade:</span> <span class="value">${fmtUn(p.estoqueQualidade)} un</span></li>
+                    <li><span class="label">Estoque Bloqueado:</span> <span class="value">${fmtUn(p.estoqueBloqueado)} un</span></li>
+                    <li><span class="label">Estoque Total:</span> <span class="value">${fmtUn(p.estoqueTotal)} un</span></li>
+                    <li><span class="label">Pendência Trânsito:</span> <span class="value">${fmtUn(p.pendenciaTransito)} un</span></li>
+                    <li><span class="label">Pendência Entrega:</span> <span class="value">${fmtUn(p.pendenciaEntrega)} un</span></li>
                     <li><span class="label">Estoque Livre R$:</span> <span class="value">${formatBRL(p.estoqueLivreRS)}</span></li>
                 </ul>
             </div>
@@ -2387,9 +2500,9 @@ function detailBlockHtml(p) {
                 <h4>⚡ Análise de Giro</h4>
                 <ul>
                     <li><span class="label">Venda Média Ponderada:</span> <span class="value">${p.vendaMedia.toLocaleString('pt-BR')} un/mês</span></li>
-                    <li><span class="label">Equivale a:</span> <span class="value">${memo.giroDia.toFixed(0)} un/dia</span></li>
-                    <li><span class="label">Dias de Estoque (livre):</span> <span class="value">${p.diasLivre.toFixed(1)}</span></li>
-                    <li><span class="label">Dias de Estoque (total):</span> <span class="value">${p.diasTotal.toFixed(1)}</span></li>
+                    <li><span class="label">Equivale a:</span> <span class="value">${fmtUn(memo.giroDia)} un/dia</span></li>
+                    <li><span class="label">Dias de Estoque (livre):</span> <span class="value">${fmtUn(p.diasLivre, 1)}</span></li>
+                    <li><span class="label">Dias de Estoque (total):</span> <span class="value">${fmtUn(p.diasTotal, 1)}</span></li>
                     <li><span class="label">Curva ABC:</span> <span class="value">${p.curva}</span></li>
                     <li><span class="label">PF:</span> <span class="value">${formatBRL(p.pf)}</span></li>
                     <li><span class="label">Última Entrada:</span> <span class="value">${p.dataUltimaEntrada || '—'}</span></li>
@@ -2470,13 +2583,152 @@ function setupDetailMultiselects() {
 }
 
 // Mini gráfico de barras para o painel de detalhes
-function createBarChartSimple(labels, values, color, isMoney) {
+// ============================================
+// TOP 5 MARCAS POR MÊS (observação de cada barra)
+// ============================================
+// Para cada um dos 5 meses da janela, soma as vendas por marca (= Material),
+// ordena e devolve as 5 maiores, junto com o % que cada uma representou no mês.
+// Lê os mesmos vetores (p.vendas / p.vendasRS) que desenham as barras, então o
+// total das marcas sempre fecha com a barra do mês.
+let _chartTipReg = {};   // id do gráfico -> [htmlMes0, htmlMes1, ... htmlMes4]
+let _chartSeq = 0;       // gera ids únicos a cada gráfico desenhado
+
+function topMarcasMes(produtos, chave) {
+    const meses = [];
+    for (let i = 0; i < 5; i++) {
+        const acc = {};
+        let total = 0;
+        produtos.forEach(p => {
+            const arr = p[chave];
+            const v = arr ? (arr[i] || 0) : 0;
+            total += v;                                  // total líquido = igual à barra do mês
+            acc[p.material] = (acc[p.material] || 0) + v; // venda líquida por marca (soma os CDs)
+        });
+        const top = Object.keys(acc)
+            .map(nome => ({ nome, valor: acc[nome] }))
+            .filter(o => o.valor > 0)                    // só marcas com venda líquida positiva
+            .sort((a, b) => b.valor - a.valor)
+            .slice(0, 5)
+            .map(o => ({ nome: o.nome, valor: o.valor, share: total > 0 ? o.valor / total : 0 }));
+        meses.push({ total, top });
+    }
+    return meses;
+}
+
+// HTML do tooltip de um mês: a lista ranqueada das 5 marcas
+function tipMarcasHtml(mesInfo, label, parcial, isMoney) {
+    const fmt = v => isMoney
+        ? 'R$ ' + Math.round(v).toLocaleString('pt-BR')
+        : Math.round(v).toLocaleString('pt-BR') + ' un';
+    const tag = parcial ? ' <span class="tip-parcial">parcial</span>' : '';
+    if (!mesInfo.top.length) {
+        return `<div class="tip-head"><span>Top 5 marcas — ${label}${tag}</span></div>` +
+               `<div class="tip-empty">Sem vendas registradas neste mês.</div>`;
+    }
+    const cor = isMoney ? 'var(--saudavel)' : 'var(--primary)';
+    const rows = mesInfo.top.map((t, k) => `
+        <div class="tip-row">
+            <span class="tip-rank">${k + 1}</span>
+            <span class="tip-name" title="${escapeHtml(t.nome)}">
+                <span class="tip-name-txt">${escapeHtml(t.nome)}</span>
+                <span class="tip-bar"><i style="width:${(t.share * 100).toFixed(1)}%;background:${cor}"></i></span>
+            </span>
+            <span class="tip-val">${fmt(t.valor)}<small>${(t.share * 100).toFixed(1)}%</small></span>
+        </div>`).join('');
+    return `<div class="tip-head"><span>Top 5 marcas — ${label}${tag}</span>` +
+           `<span class="tip-total">${fmt(mesInfo.total)}</span></div>` +
+           `<div class="tip-list">${rows}</div>`;
+}
+
+// --- Tooltip flutuante único, compartilhado por todos os gráficos ---
+let _tipPinned = false;
+function _ensureTipEl() {
+    let t = document.getElementById('chartTip');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = 'chartTip';
+        t.className = 'chart-tip';
+        document.body.appendChild(t);
+    }
+    return t;
+}
+function _posTip(t, x, y) {
+    const pad = 12;
+    const r = t.getBoundingClientRect();
+    let left = x - r.width / 2;
+    let top = y - r.height - 14;            // acima do ponteiro
+    if (top < pad) top = y + 20;            // se não couber acima, abre abaixo
+    left = Math.max(pad, Math.min(left, window.innerWidth - r.width - pad));
+    top = Math.max(pad, Math.min(top, window.innerHeight - r.height - pad));
+    t.style.left = left + 'px';
+    t.style.top = top + 'px';
+}
+function _showTip(cid, idx, x, y) {
+    const tips = _chartTipReg[cid];
+    if (!tips || tips[idx] == null) return;
+    const t = _ensureTipEl();
+    t.innerHTML = tips[idx];
+    t.classList.add('show');
+    _posTip(t, x, y);
+}
+function _hideTip() {
+    const t = document.getElementById('chartTip');
+    if (t) t.classList.remove('show');
+    _tipPinned = false;
+}
+function _hitDe(e) {
+    const el = e.target;
+    return el && el.closest ? el.closest('.bar-hit') : null;
+}
+let _chartTipsReady = false;
+function initChartTips() {
+    if (_chartTipsReady) return;
+    _chartTipsReady = true;
+    document.addEventListener('mouseover', e => {
+        if (_tipPinned) return;
+        const hit = _hitDe(e);
+        if (hit) _showTip(hit.getAttribute('data-chart'), +hit.getAttribute('data-idx'), e.clientX, e.clientY);
+    });
+    document.addEventListener('mousemove', e => {
+        if (_tipPinned) return;
+        const hit = _hitDe(e);
+        const t = document.getElementById('chartTip');
+        if (hit && t && t.classList.contains('show')) _posTip(t, e.clientX, e.clientY);
+    });
+    document.addEventListener('mouseout', e => {
+        if (_tipPinned) return;
+        const hit = _hitDe(e);
+        if (!hit) return;
+        const to = e.relatedTarget;
+        if (!to || !(to.closest && to.closest('.bar-hit'))) _hideTip();
+    });
+    // toque / clique: fixa o mês tocado (essencial no mobile); tocar fora fecha
+    document.addEventListener('click', e => {
+        const hit = _hitDe(e);
+        if (hit) {
+            _tipPinned = false;
+            const r = hit.getBoundingClientRect();
+            _showTip(hit.getAttribute('data-chart'), +hit.getAttribute('data-idx'), r.left + r.width / 2, r.top + 10);
+            _tipPinned = true;
+        } else if (_tipPinned) {
+            _hideTip();
+        }
+    });
+    window.addEventListener('scroll', _hideTip, true);
+    window.addEventListener('resize', _hideTip);
+}
+initChartTips();   // ativa os tooltips de "Top 5 marcas" nas barras (uma vez, no load)
+
+function createBarChartSimple(labels, values, color, isMoney, tips) {
     const maxV = Math.max(...values, 1);
     const w = 320, h = 180, padB = 30, padT = 24, padL = 10;
     const slot = (w - padL * 2) / labels.length;
     const plotH = h - padB - padT;
+    const interativo = Array.isArray(tips) && tips.length === labels.length;
+    const cid = interativo ? 'c' + (++_chartSeq) : '';
+    if (interativo) _chartTipReg[cid] = tips;
 
-    let bars = '';
+    let bars = '', hits = '';
     values.forEach((v, i) => {
         const bh = (v / maxV) * plotH;
         const x = padL + i * slot + slot * 0.2;
@@ -2486,12 +2738,19 @@ function createBarChartSimple(labels, values, color, isMoney) {
         bars += `<text x="${(x + bw / 2).toFixed(1)}" y="${h - padB + 16}" text-anchor="middle" font-size="11" fill="#64748b">${labels[i]}</text>`;
         const lbl = isMoney ? formatBRLShort(v) : Math.round(v).toLocaleString('pt-BR');
         bars += `<text x="${(x + bw / 2).toFixed(1)}" y="${(y - 5).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#1e293b">${lbl}</text>`;
+        if (interativo) {
+            // área sensível cobrindo a coluna inteira (transparente, por cima das barras)
+            const hx = padL + i * slot;
+            hits += `<rect class="bar-hit" data-chart="${cid}" data-idx="${i}" x="${hx.toFixed(1)}" y="${padT}" width="${slot.toFixed(1)}" height="${plotH.toFixed(1)}" fill="transparent"/>`;
+        }
     });
 
-    return `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" style="max-width:100%;">
+    const svg = `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" style="max-width:100%;">
         <line x1="${padL}" y1="${padT + plotH}" x2="${w - padL}" y2="${padT + plotH}" stroke="#e2e8f0" stroke-width="1"/>
         ${bars}
+        ${hits}
     </svg>`;
+    return interativo ? `<div class="chart-wrap">${svg}</div>` : svg;
 }
 
 // ============================================
@@ -2526,13 +2785,15 @@ function renderVendasCD() {
     produtos.forEach(p => {
         for (let i = 0; i < 5; i++) { totalUn[i] += p.vendas[i]; totalRS[i] += p.vendasRS[i]; }
         const cd = p.cd || '—';
-        if (!porCD[cd]) porCD[cd] = { un: [0, 0, 0, 0, 0], rs: [0, 0, 0, 0, 0] };
+        if (!porCD[cd]) porCD[cd] = { un: [0, 0, 0, 0, 0], rs: [0, 0, 0, 0, 0], prods: [] };
+        porCD[cd].prods.push(p);
         for (let i = 0; i < 5; i++) { porCD[cd].un[i] += p.vendas[i]; porCD[cd].rs[i] += p.vendasRS[i]; }
     });
     cdSalesPorCD = porCD;
+    _chartTipReg = {};   // zera os tooltips a cada atualização para não acumular
     const cds = Object.keys(porCD);
     const tituloTotal = cds.length === 1 ? cds[0] : 'Total da Distribuidora';
-    totalBox.innerHTML = blocoVendasCD(tituloTotal, totalUn, totalRS, true);
+    totalBox.innerHTML = blocoVendasCD(tituloTotal, totalUn, totalRS, true, produtos);
 
     // Opções do seletor, em ordem alfabética de CD (média mensal no rótulo)
     const volume = cd => porCD[cd].un.slice(0, 4).reduce((x, y) => x + y, 0);
@@ -2554,19 +2815,29 @@ function renderVendasCDDetalhe() {
         detBox.innerHTML = '<p class="cd-sales-hint">Selecione um CD acima para abrir o histórico individual dele.</p>';
         return;
     }
-    detBox.innerHTML = blocoVendasCD(cd, cdSalesPorCD[cd].un, cdSalesPorCD[cd].rs, false);
+    detBox.innerHTML = blocoVendasCD(cd, cdSalesPorCD[cd].un, cdSalesPorCD[cd].rs, false, cdSalesPorCD[cd].prods);
 }
 
-function blocoVendasCD(titulo, un, rs, destaque) {
+function blocoVendasCD(titulo, un, rs, destaque, prods) {
     const labels = JANELA.map(m => m.abbr + (m.parcial ? '*' : ''));
     const dias = dashboardData.diasCorridos || 0;
     const parcial = un[4];
     const proj = dias > 0 ? Math.round(parcial / dias * 30) : Math.round(parcial);
     const media4 = Math.round((un[0] + un[1] + un[2] + un[3]) / 4);
     const mediaRS4 = (rs[0] + rs[1] + rs[2] + rs[3]) / 4;
-    const chartUn = createBarChartSimple(labels, un.map(v => Math.round(v)), '#3b82f6') +
-        `<p class="chart-note">* ${mesVigenteNome()} parcial (até dia ${dias}). Projeção mês cheio: <strong>${proj.toLocaleString('pt-BR')} un</strong></p>`;
-    const chartRS = createBarChartSimple(labels, rs, '#10b981', true);
+
+    // Observação de cada mês: as 5 marcas (produtos) que mais venderam — em
+    // unidades no gráfico de UN e em R$ no gráfico de R$. Cada mês tem seu ranking.
+    const lista = prods || [];
+    const topUn = topMarcasMes(lista, 'vendas');
+    const topRS = topMarcasMes(lista, 'vendasRS');
+    const tipsUn = JANELA.map((m, i) => tipMarcasHtml(topUn[i], m.cap, m.parcial, false));
+    const tipsRS = JANELA.map((m, i) => tipMarcasHtml(topRS[i], m.cap, m.parcial, true));
+    const dica = '<p class="chart-hint">🏆 Passe o mouse ou toque em um mês para ver as 5 marcas que mais venderam.</p>';
+
+    const chartUn = createBarChartSimple(labels, un.map(v => Math.round(v)), '#3b82f6', false, tipsUn) +
+        `<p class="chart-note">* ${mesVigenteNome()} parcial (até dia ${dias}). Projeção mês cheio: <strong>${proj.toLocaleString('pt-BR')} un</strong></p>` + dica;
+    const chartRS = createBarChartSimple(labels, rs, '#10b981', true, tipsRS) + dica;
     return `
     <div class="detail-panel cd-sales-panel${destaque ? ' cd-sales-total' : ''}">
         <h3>${escapeHtml(titulo)}
@@ -2582,6 +2853,1037 @@ function blocoVendasCD(titulo, un, rs, destaque) {
 // ABAS
 // ============================================
 
+// ============================================
+// COCKPIT · MAPA POR CD · O QUE MUDOU
+// Tese única: "recompra represada" = quanto de faturamento Supera está travado agora,
+// medido pela MESMA conta da aba Sugestões (memoriaCompra → un a comprar × PF).
+// ============================================
+
+// Recompra represada de um produto (un a comprar × preço de fábrica).
+// Usa memoriaCompra (projeção de fim de mês + múltiplo de caixa + meta global) para
+// bater 1:1 com a aba Sugestões de Compra — não inventa um segundo racional.
+function recompraDe(p) {
+    const comprar = memoriaCompra(p).comprar;
+    return { comprar, un: comprar, rs: comprar * (p.pf || 0) };
+}
+
+// "DD/MM/AAAA" -> "AAAAMMDD" (string ordenável por data-base)
+function chaveDataRef(ref) {
+    const m = String(ref || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    return m ? (m[3] + m[2] + m[1]) : '00000000';
+}
+
+// Há algum filtro global ativo (CD, Curva ou Status)? O Cockpit mostra a comparação
+// temporal só na visão cheia (sem filtro), pois o retrato salvo é da base inteira.
+function temFiltroGlobal() {
+    return filtroCD.size > 0 || filtroCurva.size > 0 || filtroStatus.size > 0;
+}
+
+// Produtos do Cockpit: base por CD+SKU dentro do filtro global (CD/Curva/Status).
+function produtosCockpit() {
+    return originalProducts.filter(p => dentroDoFiltroGlobal(p));
+}
+
+// Agrega uma lista de produtos nos números-chave do painel (recompra, capital por faixa,
+// contagem por status). Base única dos três painéis e do snapshot.
+function agregarNumeros(prods) {
+    let recompraRS = 0, recompraUn = 0, itensCompra = 0;
+    let capTotal = 0, capAtencao = 0, capProblema = 0, capCompra = 0;
+    const cont = { deficit: 0, saudavel: 0, reposicao: 0, excesso: 0, 'sem-giro': 0 };
+    prods.forEach(p => {
+        capTotal += p.estoqueLivreRS;
+        if (p.status === 'excesso') capAtencao += p.estoqueLivreRS;
+        else if (p.status === 'sem-giro') capProblema += p.estoqueLivreRS;
+        if (p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao') capCompra += p.estoqueLivreRS;
+        cont[p.status] = (cont[p.status] || 0) + 1;
+        const r = recompraDe(p);
+        if (r.un > 0) { recompraRS += r.rs; recompraUn += r.un; itensCompra++; }
+    });
+    return { recompraRS, recompraUn, itensCompra, capTotal, capAtencao, capProblema, capCompra, cont, n: prods.length };
+}
+
+// Recompra represada por faixa de status (quem dispara o pedido).
+function recompraPorFaixa(prods) {
+    const f = { deficit: 0, saudavel: 0, reposicao: 0, excesso: 0, 'sem-giro': 0 };
+    prods.forEach(p => { const r = recompraDe(p); if (r.un > 0) f[p.status] = (f[p.status] || 0) + r.rs; });
+    return f;
+}
+
+// Total a caminho (pendência de trânsito + entrega) em unidades e em R$ (× PF), separado
+// por tipo. Já está dentro do Estoque Total, então a recompra represada é líquida disto.
+function pendenciaTotal(prods) {
+    let transito = 0, entrega = 0, rs = 0;
+    prods.forEach(p => {
+        const t = p.pendenciaTransito || 0, e = p.pendenciaEntrega || 0;
+        transito += t; entrega += e;
+        rs += (t + e) * (p.pf || 0);
+    });
+    return { transito, entrega, un: transito + entrega, rs };
+}
+
+// Recompra represada quebrada por curva (A/B/C). Cada curva traz R$, unidades, pontos
+// e a parcela que é déficit crítico (< 45 dias).
+function recompraPorCurva(prods) {
+    const base = () => ({ rs: 0, un: 0, itens: 0, deficit: 0 });
+    const c = { A: base(), B: base(), C: base() };
+    prods.forEach(p => {
+        const k = (p.curva === 'A' || p.curva === 'B' || p.curva === 'C') ? p.curva : null;
+        if (!k) return;
+        const r = recompraDe(p);
+        if (r.un > 0) {
+            c[k].rs += r.rs; c[k].un += r.un; c[k].itens++;
+            if (p.status === 'deficit') c[k].deficit += r.rs;
+        }
+    });
+    return c;
+}
+
+// Produtos de uma curva CONSOLIDADOS por marca (uma linha por SKU, somando TODOS os CDs).
+// A sugestão de compra de cada linha é a soma das necessidades de cada CD daquela marca
+// (un e R$), pois a reposição é por CD; aqui apresentamos só o total. Mantém apenas marcas
+// com recompra represada > 0 (as que têm sugestão). Respeita o filtro global, igual aos
+// cards do Cockpit. A soma de un/R$ desta lista é idêntica ao card da curva.
+function produtosDaCurvaConsolidado(curvaLetra) {
+    const prods = produtosCockpit().filter(p => p.curva === curvaLetra);
+    const porSku = {};
+    prods.forEach(p => {
+        const r = recompraDe(p);
+        const s = porSku[p.sku] || (porSku[p.sku] = {
+            sku: p.sku, produto: rotuloProduto(p),
+            un: 0, rs: 0, estoqueLivre: 0, vendaMedia: 0, nCD: 0, defCD: 0, cds: []
+        });
+        s.un += r.un; s.rs += r.rs;
+        s.estoqueLivre += p.estoqueLivre; s.vendaMedia += p.vendaMedia;
+        s.nCD++;
+        if (p.status === 'deficit') s.defCD++;
+        // Linha por CD daquela marca (para o drill-down: quais CDs estão em déficit)
+        s.cds.push({ cd: p.cd, status: p.status, diasLivre: p.diasLivre, un: r.un, rs: r.rs });
+    });
+    return Object.values(porSku)
+        .filter(s => s.un > 0)
+        .map(s => {
+            s.diasLivre = s.vendaMedia > 0 ? (s.estoqueLivre / s.vendaMedia) * 30 : 0;
+            s.status = s.vendaMedia > 0 ? classificar(s.diasLivre) : 'sem-sinal';
+            return s;
+        })
+        .sort((a, b) => b.rs - a.rs);
+}
+
+// Fecha o modal de curva com a tecla Esc
+function cvModalEsc(e) { if (e.key === 'Escape') fecharModalCurva(); }
+
+function fecharModalCurva() {
+    const back = document.getElementById('cvModalBackdrop');
+    if (back) back.remove();
+    document.body.style.overflow = '';
+    document.removeEventListener('keydown', cvModalEsc);
+}
+
+// Abre o modal com os produtos da curva e suas sugestões, consolidados no total (todos os CDs).
+function abrirModalCurva(curvaLetra) {
+    fecharModalCurva();   // instância única
+    const lista = produtosDaCurvaConsolidado(curvaLetra);
+    const totUn = lista.reduce((s, x) => s + x.un, 0);
+    const totRS = lista.reduce((s, x) => s + x.rs, 0);
+    const metaTxt = metaDiasGlobal;
+
+    const linhas = lista.map((s, i) => {
+        const cob = s.vendaMedia > 0 ? `≈ ${Math.round(s.diasLivre).toLocaleString('pt-BR')} d` : 'sem giro';
+        const cobCls = s.status === 'deficit' ? 'cvm-cob-def'
+            : (s.status === 'sem-giro' || s.status === 'excesso') ? 'cvm-cob-exc' : 'cvm-cob-ok';
+        const expansivel = s.defCD > 0;
+        const cdTxt = expansivel
+            ? `${s.nCD} ${s.nCD === 1 ? 'CD' : 'CDs'} · <strong>${s.defCD} em déficit</strong>`
+            : `${s.nCD} ${s.nCD === 1 ? 'CD' : 'CDs'}`;
+
+        const linha = `<tr class="cvm-row${expansivel ? ' cvm-expandable' : ''}"${expansivel ? ` data-i="${i}"` : ''}>
+            <td class="cvm-rank">${expansivel ? '<span class="cvm-caret">▸</span>' : ''}${i + 1}</td>
+            <td class="cvm-prod">${escapeHtml(s.produto)}</td>
+            <td class="cvm-un">${Math.round(s.un).toLocaleString('pt-BR')}</td>
+            <td class="cvm-rs">${formatBRLCheio(s.rs)}</td>
+            <td class="cvm-cob ${cobCls}">${cob}</td>
+            <td class="cvm-cd">${cdTxt}</td>
+        </tr>`;
+
+        if (!expansivel) return linha;
+
+        // Drill-down: CDs em déficit (cobertura de estoque livre < 45 dias), mais críticos primeiro.
+        // Cada CD é uma linha na MESMA tabela, alinhada sob Un a comprar / R$ / Cobertura.
+        const defCds = s.cds.filter(c => c.status === 'deficit').sort((a, b) => a.diasLivre - b.diasLivre);
+        const unDef = defCds.reduce((x, c) => x + c.un, 0);
+        const unFora = Math.round(s.un - unDef);
+        const nFora = s.cds.filter(c => c.status !== 'deficit' && c.un > 0).length;
+
+        const cabecalho = `<tr class="cvm-sub cvm-sub-head" data-parent="${i}">
+            <td></td>
+            <td colspan="5" class="cvm-sub-label">${defCds.length} ${defCds.length === 1 ? 'CD em déficit' : 'CDs em déficit'} <span class="cvm-sub-hint">cobertura abaixo de 45 dias, mais crítico primeiro</span></td>
+        </tr>`;
+
+        const linhasCD = defCds.map(c => `<tr class="cvm-sub cvm-sub-cd" data-parent="${i}">
+            <td></td>
+            <td class="cvm-prod cvm-sub-cd-name">${escapeHtml(c.cd)}</td>
+            <td class="cvm-un cvm-sub-un">${c.un === 0 ? '<span class="cvm-cd-tag" title="cobertura abaixo de 45 dias, mas o que está a caminho já cobre">coberto</span>' : Math.round(c.un).toLocaleString('pt-BR')}</td>
+            <td class="cvm-rs cvm-sub-rs">${formatBRLCheio(c.rs)}</td>
+            <td class="cvm-cob cvm-cob-def">≈ ${Math.round(c.diasLivre).toLocaleString('pt-BR')} d</td>
+            <td class="cvm-cd"></td>
+        </tr>`).join('');
+
+        const rodape = unFora > 0 ? `<tr class="cvm-sub cvm-sub-foot" data-parent="${i}">
+            <td></td>
+            <td colspan="5">+ ${unFora.toLocaleString('pt-BR')} un a comprar em ${nFora} ${nFora === 1 ? 'CD' : 'CDs'} fora de déficit (45-60d ou em reposição)</td>
+        </tr>` : '';
+
+        return linha + cabecalho + linhasCD + rodape;
+    }).join('');
+
+    const corpo = lista.length
+        ? `<table class="cv-modal-table">
+                <thead><tr>
+                    <th class="cvm-rank">#</th>
+                    <th>Produto</th>
+                    <th class="cvm-num">Un a comprar</th>
+                    <th class="cvm-num">R$ represado</th>
+                    <th class="cvm-num">Cobertura</th>
+                    <th>Presença</th>
+                </tr></thead>
+                <tbody>${linhas}</tbody>
+            </table>`
+        : `<div class="cv-modal-vazio">Nenhum produto com recompra represada nesta curva${temFiltroGlobal() ? ' dentro do filtro atual' : ''}.</div>`;
+
+    const html = `
+        <div class="cv-modal" role="dialog" aria-modal="true" aria-label="Produtos da Curva ${curvaLetra}">
+            <div class="cv-modal-head">
+                <div class="cv-modal-head-top">
+                    <div>
+                        <div class="cv-modal-eyebrow">Recompra represada · Curva ${curvaLetra}</div>
+                        <div class="cv-modal-tot">${formatBRLCheio(totRS)}</div>
+                    </div>
+                    <button type="button" class="cv-modal-x" aria-label="Fechar">×</button>
+                </div>
+                <div class="cv-modal-sub">${lista.length.toLocaleString('pt-BR')} ${lista.length === 1 ? 'produto' : 'produtos'} · ${Math.round(totUn).toLocaleString('pt-BR')} un a comprar · soma de todos os CDs · meta ${metaTxt} dias</div>
+            </div>
+            <div class="cv-modal-body">${corpo}</div>
+            <div class="cv-modal-foot">Clique num produto com déficit para ver os CDs. Sugestão por produto = soma das necessidades de cada CD (a reposição é por CD; aqui mostra-se só o total). A cobertura é consolidada nos CDs. Mesma conta da aba Sugestões de Compra.</div>
+        </div>`;
+
+    const back = document.createElement('div');
+    back.className = 'cv-modal-backdrop';
+    back.id = 'cvModalBackdrop';
+    back.innerHTML = html;
+    document.body.appendChild(back);
+    document.body.style.overflow = 'hidden';
+
+    back.addEventListener('click', e => { if (e.target === back) fecharModalCurva(); });
+    back.querySelector('.cv-modal-x').addEventListener('click', fecharModalCurva);
+    document.addEventListener('keydown', cvModalEsc);
+
+    // Expandir/recolher os CDs em déficit de cada produto
+    back.querySelectorAll('.cvm-row.cvm-expandable').forEach(row => {
+        row.addEventListener('click', () => {
+            const i = row.getAttribute('data-i');
+            const aberto = row.classList.toggle('open');
+            back.querySelectorAll('.cvm-sub[data-parent="' + i + '"]').forEach(sub => {
+                sub.classList.toggle('open', aberto);
+            });
+        });
+    });
+}
+
+// Composição da recompra/déficit por GIRO. Produtos sem histórico de venda
+// (vendaMedia <= 0) caem em "déficit" por terem 0 dias de cobertura, mas a conta de
+// compra os zera (não há demanda a repor). Este corte separa o déficit real (com giro)
+// do ruído (sem giro), e confirma que a recompra represada vem só de itens com giro.
+function composicaoGiro(prods) {
+    let rsComGiro = 0, rsSemGiro = 0, unComGiro = 0, unSemGiro = 0;
+    let defComGiro = 0, defSemGiro = 0;
+    prods.forEach(p => {
+        const temGiro = p.vendaMedia > 0;
+        if (p.status === 'deficit') { temGiro ? defComGiro++ : defSemGiro++; }
+        const r = recompraDe(p);
+        if (r.un > 0) {
+            if (temGiro) { rsComGiro += r.rs; unComGiro += r.un; }
+            else { rsSemGiro += r.rs; unSemGiro += r.un; }
+        }
+    });
+    const totRS = rsComGiro + rsSemGiro;
+    return {
+        rsComGiro, rsSemGiro, unComGiro, unSemGiro, defComGiro, defSemGiro,
+        pctComGiro: totRS > 0 ? (rsComGiro / totRS * 100) : 100
+    };
+}
+
+// ---- Snapshot compacto da base inteira (para "O que mudou") ----
+function montarSnapshot() {
+    if (!dashboardData) return null;
+    const prods = originalProducts;             // base completa, SEM filtro
+    // Congela o retrato SEMPRE na meta de referência (45 dias), seja qual for a meta na
+    // tela. Assim duas bases são sempre comparadas no mesmo prazo. Restaura no fim.
+    const metaSalva = metaDiasGlobal;
+    metaDiasGlobal = META_REF_COMPARATIVO;
+    let snap;
+    try {
+        const tot = agregarNumeros(prods);
+        const porCD = {};
+        const porSku = {};
+        prods.forEach(p => {
+            const r = recompraDe(p);
+            const c = porCD[p.cd] || (porCD[p.cd] = { cd: p.cd, recompraRS: 0, un: 0, capTotal: 0, capProblema: 0, capAtencao: 0, estoqueLivre: 0, vendaMedia: 0, def: 0 });
+            c.capTotal += p.estoqueLivreRS; c.estoqueLivre += p.estoqueLivre; c.vendaMedia += p.vendaMedia;
+            if (p.status === 'excesso') c.capAtencao += p.estoqueLivreRS;
+            else if (p.status === 'sem-giro') c.capProblema += p.estoqueLivreRS;
+            if (p.status === 'deficit') c.def++;
+            if (r.un > 0) { c.recompraRS += r.rs; c.un += r.un; }
+
+            const s = porSku[p.sku] || (porSku[p.sku] = { sku: p.sku, material: truncate(p.material, 44), curva: p.curva, recompraRS: 0, un: 0, capRS: 0, estoqueLivre: 0, vendaMedia: 0, nCD: 0, defCD: 0 });
+            s.recompraRS += r.rs; s.un += r.un; s.capRS += p.estoqueLivreRS;
+            s.estoqueLivre += p.estoqueLivre; s.vendaMedia += p.vendaMedia; s.nCD++;
+            if (p.status === 'deficit') s.defCD++;
+        });
+        Object.values(porCD).forEach(c => { c.diasMedios = c.vendaMedia > 0 ? (c.estoqueLivre / c.vendaMedia) * 30 : 0; });
+        Object.values(porSku).forEach(s => {
+            s.diasLivre = s.vendaMedia > 0 ? (s.estoqueLivre / s.vendaMedia) * 30 : 0;
+            s.status = s.vendaMedia > 0 ? classificar(s.diasLivre) : 'sem-sinal';
+            s.sellout = Math.round(s.vendaMedia);            // saída média ponderada (un/mês)
+            s.recompraRS = Math.round(s.recompraRS); s.un = Math.round(s.un); s.capRS = Math.round(s.capRS);
+            delete s.estoqueLivre; delete s.vendaMedia;      // poda o que não é usado na comparação
+        });
+        snap = {
+            dataKey: chaveDataRef(dashboardData.dataReferencia),
+            dataRef: dashboardData.dataReferencia,
+            ts: Date.now(),
+            metaRef: META_REF_COMPARATIVO,   // prazo em que este retrato foi congelado
+            totais: tot,
+            porCD,
+            porSku
+        };
+    } finally {
+        metaDiasGlobal = metaSalva;          // devolve a meta da tela
+    }
+    return snap;
+}
+
+// Estado da comparação (preenchido por sincronizarHistorico, assíncrono)
+let cmpAtual = null;
+let cmpAnterior = null;
+
+// Monta o retrato da base atual, encontra o retrato anterior (data-base distinta e mais
+// recente antes desta), salva o atual e redesenha Cockpit + "O que mudou".
+async function sincronizarHistorico() {
+    if (!dashboardData) return;
+    cmpAtual = montarSnapshot();
+    try {
+        const hist = await snapListar();
+        const anteriores = hist.filter(s => s.dataKey < cmpAtual.dataKey);
+        cmpAnterior = anteriores.length ? anteriores[anteriores.length - 1] : null;
+        await snapSalvar(cmpAtual);
+    } catch (e) {
+        console.warn('Histórico de comparação indisponível:', e);
+        cmpAnterior = null;
+    }
+    updateCockpit();    // agora com o delta (se houver base anterior)
+    updateMudancas();
+}
+
+// ---- Formatação de variação ----
+function fmtSinalRS(v) {
+    const s = v > 0 ? '+' : v < 0 ? '−' : '';
+    return s + formatBRLCheio(Math.abs(v)).replace('R$ ', 'R$ ');
+}
+function fmtSinalUn(v) {
+    const s = v > 0 ? '+' : v < 0 ? '−' : '';
+    return s + Math.abs(Math.round(v)).toLocaleString('pt-BR');
+}
+function fmtPct(v) {
+    if (!isFinite(v)) return '—';
+    const s = v > 0 ? '+' : v < 0 ? '−' : '';
+    return s + Math.abs(v).toFixed(1).replace('.', ',') + '%';
+}
+// Classe de cor para um delta. Em recompra/capital travado, SUBIR é ruim (vermelho).
+function classeDelta(v, subirEhRuim) {
+    if (Math.abs(v) < 0.5) return 'delta-flat';
+    const ruim = subirEhRuim ? v > 0 : v < 0;
+    return ruim ? 'delta-ruim' : 'delta-bom';
+}
+
+// ============================================
+// COCKPIT
+// ============================================
+function updateCockpit() {
+    const box = document.getElementById('cockpitContent');
+    if (!box) return;
+    if (!dashboardData) { box.innerHTML = '<div class="empty-state">Carregue uma planilha para abrir o cockpit.</div>'; return; }
+
+    const filtrado = temFiltroGlobal();
+    const prods = produtosCockpit();
+    const a = agregarNumeros(prods);
+    const faixa = recompraPorFaixa(prods);
+    const curva = recompraPorCurva(prods);
+    const giro = composicaoGiro(prods);
+    const pend = pendenciaTotal(prods);
+    const totalFaixa = faixa.deficit + faixa.saudavel + faixa.reposicao + faixa.excesso + faixa['sem-giro'];
+    const pctDef = a.recompraRS > 0 ? (faixa.deficit / a.recompraRS * 100) : 0;
+
+    // Delta do número-herói vs base anterior (só na visão cheia). A comparação é SEMPRE
+    // no mesmo prazo (META_REF_COMPARATIVO = 45 dias): usa os retratos congelados das duas
+    // bases, não o número da tela. Se a base anterior foi salva numa versão antiga (sem
+    // metaRef), avisa para reabri-la em vez de subtrair prazos diferentes.
+    let heroDelta = '';
+    if (!filtrado && cmpAtual && cmpAnterior) {
+        const compativel = cmpAtual.metaRef === META_REF_COMPARATIVO && cmpAnterior.metaRef === META_REF_COMPARATIVO;
+        if (compativel) {
+            const atualRef = cmpAtual.totais.recompraRS;
+            const d = atualRef - cmpAnterior.totais.recompraRS;
+            const p = cmpAnterior.totais.recompraRS > 0 ? (d / cmpAnterior.totais.recompraRS * 100) : Infinity;
+            heroDelta = `<div class="cockpit-hero-delta ${classeDelta(d, true)}">
+                ${fmtSinalRS(d)} <span class="cockpit-hero-delta-pct">(${fmtPct(p)})</span>
+                <span class="cockpit-hero-delta-base">vs base ${escapeHtml(cmpAnterior.dataRef)} · ${META_REF_COMPARATIVO} dias</span>
+            </div>`;
+        } else {
+            heroDelta = `<div class="cockpit-hero-delta delta-incompat">
+                <span class="cockpit-hero-delta-base">base ${escapeHtml(cmpAnterior.dataRef)} foi salva em outra meta — reabra essa planilha uma vez para comparar a ${META_REF_COMPARATIVO} dias</span>
+            </div>`;
+        }
+    }
+
+    const metaTxt = metaDiasGlobal;
+    const avisoFiltro = filtrado
+        ? `<div class="cockpit-filtro-aviso">Números filtrados pela seleção atual (CD/Curva/Status). A comparação com a base anterior aparece na visão sem filtro. <button type="button" class="cockpit-limpa-filtro" id="cockpitLimpaFiltro">Limpar filtros</button></div>`
+        : '';
+
+    // Barra de composição do represada por faixa
+    const seg = (v, cor, label) => {
+        if (v <= 0 || totalFaixa <= 0) return '';
+        const w = v / totalFaixa * 100;
+        const txt = w >= 10 ? `${label} · ${formatBRLCheio(v).replace('R$ ', '')}` : '';
+        return `<div class="cockpit-seg" style="flex:0 0 ${w.toFixed(2)}%;background:${cor};" title="${label}: ${formatBRLCheio(v)}">${txt}</div>`;
+    };
+
+    box.innerHTML = `
+        ${avisoFiltro}
+        <div class="cockpit-hero">
+            <div class="cockpit-hero-eyebrow">Recompra represada · potencial de faturamento Supera</div>
+            <div class="cockpit-hero-value">${formatBRLCheio(a.recompraRS)}</div>
+            ${heroDelta}
+            <div class="cockpit-hero-sub">
+                ${a.recompraUn.toLocaleString('pt-BR')} unidades a comprar em ${a.itensCompra.toLocaleString('pt-BR')} pontos (CD × produto),
+                para levar a cobertura à meta de <strong>${metaTxt} dias</strong> (ajustável na aba Sugestões).
+            </div>
+            ${pend.un > 0 ? `<div class="cockpit-hero-pend">
+                <span class="cockpit-hero-pend-dot"></span>
+                <span><strong>${Math.round(pend.un).toLocaleString('pt-BR')} un</strong> já a caminho — ${Math.round(pend.transito).toLocaleString('pt-BR')} em trânsito + ${Math.round(pend.entrega).toLocaleString('pt-BR')} em entrega · <strong>${formatBRLCheio(pend.rs)}</strong> em PF. Já dentro do Estoque Total, então a recompra acima é líquida do que a SC já pediu.</span>
+            </div>` : ''}
+            <div class="cockpit-hero-nucleo ${pctDef >= 50 ? 'nucleo-alto' : ''}">
+                <strong>${formatBRLCheio(faixa.deficit)}</strong> disso (${pctDef.toFixed(0)}%) é déficit crítico — itens abaixo de 45 dias, a parte que a SC deveria estar disparando agora.
+            </div>
+        </div>
+
+        <div class="cockpit-giro">
+            <span class="cockpit-giro-ok"><span class="cockpit-giro-dot"></span><strong>${giro.pctComGiro.toFixed(0)}%</strong> da recompra represada é de produtos com giro real (${giro.unComGiro.toLocaleString('pt-BR')} un)</span>
+            ${giro.defSemGiro > 0 ? `<span class="cockpit-giro-alerta">${giro.defSemGiro.toLocaleString('pt-BR')} ${giro.defSemGiro === 1 ? 'item aparece' : 'itens aparecem'} em déficit sem histórico de venda — ficam de fora da conta de compra</span>` : ''}
+        </div>
+
+        <div class="cockpit-comp">
+            <div class="cockpit-comp-head">Composição do represada por faixa de cobertura</div>
+            <div class="cockpit-comp-bar">
+                ${seg(faixa.deficit, 'var(--deficit)', 'Déficit < 45d')}
+                ${seg(faixa.saudavel, 'var(--excesso-light)', 'Top-up 45–60d')}
+                ${seg(faixa.reposicao, 'var(--reposicao)', 'Em reposição')}
+                ${seg(faixa.excesso, 'var(--saudavel-light)', 'Ajuste fino')}
+            </div>
+            <div class="cockpit-comp-leg">
+                <span class="cockpit-leg"><span class="cockpit-leg-dot" style="background:var(--deficit)"></span>Déficit &lt; 45d: <strong>${formatBRLCheio(faixa.deficit)}</strong></span>
+                <span class="cockpit-leg"><span class="cockpit-leg-dot" style="background:var(--excesso-light)"></span>Top-up 45–60d: <strong>${formatBRLCheio(faixa.saudavel)}</strong></span>
+                ${faixa.reposicao > 0 ? `<span class="cockpit-leg"><span class="cockpit-leg-dot" style="background:var(--reposicao)"></span>Em reposição: <strong>${formatBRLCheio(faixa.reposicao)}</strong></span>` : ''}
+            </div>
+        </div>
+
+        <div class="cockpit-curva">
+            <div class="cockpit-curva-head">Recompra represada por curva</div>
+            <div class="cockpit-curva-cards">
+                ${['A', 'B', 'C'].map(k => {
+                    const cv = curva[k];
+                    const pct = a.recompraRS > 0 ? (cv.rs / a.recompraRS * 100) : 0;
+                    const clicavel = cv.un > 0;
+                    return `<div class="cockpit-curva-card cv-${k}${clicavel ? ' is-link' : ''}"${clicavel ? ` data-curva="${k}" role="button" tabindex="0"` : ''}>
+                        <div class="cockpit-curva-letra">Curva ${k}</div>
+                        <div class="cockpit-curva-val">${formatBRLCheio(cv.rs)}</div>
+                        <div class="cockpit-curva-meta">${pct.toFixed(0)}% do total · ${cv.itens.toLocaleString('pt-BR')} itens · ${cv.un.toLocaleString('pt-BR')} un</div>
+                        <div class="cockpit-curva-def">déficit ${formatBRLCheio(cv.deficit)}</div>
+                        ${clicavel ? '<div class="cockpit-curva-cta">ver produtos →</div>' : ''}
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>
+
+        <div class="cockpit-cards">
+            <div class="cockpit-card cockpit-card-link" data-goto="problema">
+                <div class="cockpit-card-val sem-giro">${formatBRLCheio(a.capProblema)}</div>
+                <div class="cockpit-card-lbl">Capital travado · problema (&gt; 100 dias)</div>
+                <div class="cockpit-card-meta">${a.cont['sem-giro'].toLocaleString('pt-BR')} itens · ${a.capTotal > 0 ? (a.capProblema / a.capTotal * 100).toFixed(0) : 0}% do capital livre</div>
+                ${deltaCard(!filtrado, a.capProblema, cmpAnterior && cmpAnterior.totais.capProblema, true)}
+            </div>
+            <div class="cockpit-card cockpit-card-link" data-goto="atencao">
+                <div class="cockpit-card-val excesso">${formatBRLCheio(a.capAtencao)}</div>
+                <div class="cockpit-card-lbl">Capital em atenção (60–100 dias)</div>
+                <div class="cockpit-card-meta">${a.cont.excesso.toLocaleString('pt-BR')} itens · ${a.capTotal > 0 ? (a.capAtencao / a.capTotal * 100).toFixed(0) : 0}% do capital livre</div>
+                ${deltaCard(!filtrado, a.capAtencao, cmpAnterior && cmpAnterior.totais.capAtencao, true)}
+            </div>
+            <div class="cockpit-card cockpit-card-link" data-goto="compra">
+                <div class="cockpit-card-val">${(a.cont.deficit + a.cont.saudavel + a.cont.reposicao).toLocaleString('pt-BR')}</div>
+                <div class="cockpit-card-lbl">Itens com necessidade de compra (&lt; 60 dias)</div>
+                <div class="cockpit-card-meta">déficit ${a.cont.deficit.toLocaleString('pt-BR')} · 45–60d ${a.cont.saudavel.toLocaleString('pt-BR')} · em reposição ${a.cont.reposicao.toLocaleString('pt-BR')}</div>
+            </div>
+            <div class="cockpit-card">
+                <div class="cockpit-card-val">${formatBRLCheio(a.capTotal)}</div>
+                <div class="cockpit-card-lbl">Capital em estoque livre (total)</div>
+                <div class="cockpit-card-meta">${a.n.toLocaleString('pt-BR')} pontos de estoque ativos</div>
+            </div>
+        </div>
+
+        <div class="cockpit-foot">Base ${escapeHtml(dashboardData.dataReferencia)} · ${a.cont.deficit + a.cont.saudavel + a.cont.reposicao + a.cont.excesso + a.cont['sem-giro'] + (a.cont['sem-sinal'] || 0) + (a.cont['parado'] || 0)} itens classificados. A recompra represada usa a mesma conta da aba Sugestões de Compra.</div>
+    `;
+
+    // Navegação dos cards
+    box.querySelectorAll('.cockpit-card-link').forEach(card => {
+        card.addEventListener('click', () => {
+            const goto = card.getAttribute('data-goto');
+            if (goto === 'compra') {
+                const recF = document.getElementById('recFilter');
+                if (recF) recF.value = 'deficit';
+                updateRecommendations();
+                ativarAba('recommendations');
+            } else {
+                filtroStatus.clear();
+                filtroStatus.add(goto === 'problema' ? 'sem-giro' : 'excesso');
+                sortBy.value = 'dias-desc';
+                aplicarTudo();
+                ativarAba('products');
+            }
+        });
+    });
+    // Clique nos cards de curva abre o modal de produtos consolidados (todos os CDs somados)
+    box.querySelectorAll('.cockpit-curva-card.is-link').forEach(card => {
+        const abrir = () => abrirModalCurva(card.getAttribute('data-curva'));
+        card.addEventListener('click', abrir);
+        card.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrir(); }
+        });
+    });
+
+    const limpa = document.getElementById('cockpitLimpaFiltro');
+    if (limpa) limpa.addEventListener('click', () => {
+        filtroCD.clear(); filtroCurva.clear(); filtroStatus.clear();
+        productSearch.value = '';
+        aplicarTudo();
+    });
+}
+
+// Mini-delta para os cards do cockpit (capital). Só aparece na visão cheia e com base anterior.
+function deltaCard(mostrar, atual, anterior, subirEhRuim) {
+    if (!mostrar || anterior == null) return '';
+    const d = atual - anterior;
+    if (Math.abs(d) < 0.5) return `<div class="cockpit-card-delta delta-flat">sem variação vs base anterior</div>`;
+    const p = anterior > 0 ? (d / anterior * 100) : Infinity;
+    return `<div class="cockpit-card-delta ${classeDelta(d, subirEhRuim)}">${fmtSinalRS(d)} (${fmtPct(p)}) vs anterior</div>`;
+}
+
+// ============================================
+// MAPA POR CD
+// ============================================
+function updateMapaCD() {
+    const box = document.getElementById('mapaCdContent');
+    if (!box) return;
+    if (!dashboardData) { box.innerHTML = '<div class="empty-state">Carregue uma planilha para ver o ranking de CDs.</div>'; return; }
+
+    // O Mapa respeita só o filtro de Curva (global). Sempre mostra todos os CDs no ranking.
+    const prods = originalProducts.filter(p => !filtroCurva.size || filtroCurva.has(p.curva));
+    const porCD = {};
+    prods.forEach(p => {
+        const c = porCD[p.cd] || (porCD[p.cd] = { cd: p.cd, recompraRS: 0, un: 0, itens: 0, capTotal: 0, capProblema: 0, capAtencao: 0, estoqueLivre: 0, vendaMedia: 0, def: 0, enc: 0 });
+        c.capTotal += p.estoqueLivreRS; c.estoqueLivre += p.estoqueLivre; c.vendaMedia += p.vendaMedia;
+        if (p.status === 'excesso') c.capAtencao += p.estoqueLivreRS;
+        else if (p.status === 'sem-giro') { c.capProblema += p.estoqueLivreRS; c.enc++; }
+        if (p.status === 'deficit') c.def++;
+        const r = recompraDe(p);
+        if (r.un > 0) { c.recompraRS += r.rs; c.un += r.un; c.itens++; }
+    });
+    const lista = Object.values(porCD);
+    lista.forEach(c => { c.diasMedios = c.vendaMedia > 0 ? (c.estoqueLivre / c.vendaMedia) * 30 : 0; });
+
+    const sortKey = (document.getElementById('mapaCdSort') || {}).value || 'recompra';
+    // Cada ordenação define qual número aparece em destaque (valor + barra + topo),
+    // pra que o card mostre a métrica que você está rankeando, não sempre a represada.
+    const metricas = {
+        recompra:  { val: c => c.recompraRS,  lbl: 'recompra represada',            money: true,  asc: false, totLbl: 'Recompra represada' },
+        problema:  { val: c => c.capProblema, lbl: 'capital travado > 100 dias',     money: true,  asc: false, totLbl: 'Capital travado > 100 dias' },
+        atencao:   { val: c => c.capAtencao,  lbl: 'capital em atenção 60-100 dias', money: true,  asc: false, totLbl: 'Capital em atenção 60-100 dias' },
+        cobertura: { val: c => c.diasMedios,  lbl: 'menor cobertura média',          money: false, asc: true,  totLbl: 'Cobertura' },
+        nome:      { val: c => c.recompraRS,  lbl: 'recompra represada',            money: true,  asc: false, totLbl: 'Recompra represada' }
+    };
+    const M = metricas[sortKey] || metricas.recompra;
+
+    if (sortKey === 'nome') lista.sort((a, b) => a.cd.localeCompare(b.cd));
+    else lista.sort((a, b) => M.asc ? (M.val(a) - M.val(b)) : (M.val(b) - M.val(a)));
+
+    const totRecompra = lista.reduce((s, c) => s + c.recompraRS, 0);
+    const totMetric = lista.reduce((s, c) => s + (M.money ? M.val(c) : 0), 0);
+    const maxMetric = Math.max(1, ...lista.map(c => (M.money ? M.val(c) : 0)));
+    // Barra: R$ proporcional ao valor; cobertura, pior (menor) = mais cheia
+    const barraPct = c => M.money
+        ? (M.val(c) / maxMetric * 100)
+        : Math.max(3, Math.min(100, (120 - c.diasMedios) / 120 * 100));
+
+    // CD em destaque no topo (independe da ordem da lista no caso "nome")
+    const destaque = sortKey === 'nome'
+        ? lista.reduce((a, b) => (b.recompraRS > a.recompraRS ? b : a), lista[0] || null)
+        : (lista[0] || null);
+
+    // Snapshot anterior por CD (para o delta de recompra por CD)
+    const anteriorCD = (!filtroCurva.size && cmpAnterior && cmpAnterior.metaRef === META_REF_COMPARATIVO) ? cmpAnterior.porCD : null;
+
+    const linhas = lista.map((c, i) => {
+        let delta = '';
+        if (anteriorCD && anteriorCD[c.cd]) {
+            const d = c.recompraRS - anteriorCD[c.cd].recompraRS;
+            if (Math.abs(d) >= 1) delta = `<span class="mapa-delta ${classeDelta(d, true)}">${fmtSinalRS(d)}</span>`;
+        } else if (anteriorCD && !anteriorCD[c.cd]) {
+            delta = `<span class="mapa-delta delta-novo">novo</span>`;
+        }
+        const valTxt = M.money ? formatBRLCheio(M.val(c)) : `${c.diasMedios.toFixed(0)}d`;
+        return `
+            <div class="mapa-row">
+                <div class="mapa-rank">${i + 1}</div>
+                <div class="mapa-main">
+                    <div class="mapa-head">
+                        <span class="mapa-cd">${escapeHtml(c.cd)}</span>
+                        <span class="mapa-val">${valTxt} ${delta}</span>
+                    </div>
+                    <div class="mapa-bar-track"><div class="mapa-bar-fill" style="width:${barraPct(c).toFixed(1)}%"></div></div>
+                    <div class="mapa-meta">
+                        <span class="mapa-meta-tag">${M.lbl}</span>
+                        <span>${c.itens} itens · ${c.un.toLocaleString('pt-BR')} un</span>
+                        <span class="mapa-meta-cap">represada: <strong>${formatBRLCheio(c.recompraRS)}</strong></span>
+                        <span class="mapa-meta-cap">atenção 60-100d: <strong class="excesso">${formatBRLCheio(c.capAtencao)}</strong></span>
+                        <span class="mapa-meta-cap">travado &gt;100d: <strong class="sem-giro">${formatBRLCheio(c.capProblema)}</strong></span>
+                        <span class="mapa-meta-cap">cobertura: <strong>${c.diasMedios.toFixed(0)}d</strong></span>
+                    </div>
+                </div>
+            </div>`;
+    }).join('');
+
+    const heroEsq = M.money
+        ? `<div class="mapa-resumo-val">${formatBRLCheio(totMetric)}</div><div class="mapa-resumo-lbl">${M.totLbl} nos ${lista.length} CDs</div>`
+        : `<div class="mapa-resumo-val">${formatBRLCheio(totRecompra)}</div><div class="mapa-resumo-lbl">Recompra represada nos ${lista.length} CDs</div>`;
+    const heroDirLbl = M.money ? `Maior ${M.lbl}` : 'Menor cobertura média';
+    const heroDirVal = destaque ? (M.money ? ' · ' + formatBRLCheio(M.val(destaque)) : ' · ' + destaque.diasMedios.toFixed(0) + 'd') : '';
+
+    box.innerHTML = `
+        <div class="mapa-resumo">
+            <div class="mapa-resumo-item">${heroEsq}</div>
+            <div class="mapa-resumo-item"><div class="mapa-resumo-val">${escapeHtml(destaque ? destaque.cd : '--')}</div><div class="mapa-resumo-lbl">${heroDirLbl}${heroDirVal}</div></div>
+        </div>
+        <div class="mapa-list">${linhas}</div>`;
+}
+
+// ============================================
+// MAPA DE GARGALO (déficit crítico × capital travado por CD)
+// ============================================
+function updateGargalo() {
+    const box = document.getElementById('gargaloContent');
+    if (!box) return;
+    if (!dashboardData) { box.innerHTML = '<div class="empty-state">Carregue uma planilha para mapear os gargalos por CD.</div>'; return; }
+
+    // Mesma regra do Mapa por CD: respeita só o filtro de Curva (global).
+    const prods = originalProducts.filter(p => !filtroCurva.size || filtroCurva.has(p.curva));
+    const porCD = {};
+    prods.forEach(p => {
+        const c = porCD[p.cd] || (porCD[p.cd] = { cd: p.cd, defRS: 0, travado: 0, nDef: 0, nEnc: 0 });
+        if (p.status === 'sem-giro') { c.travado += p.estoqueLivreRS; c.nEnc++; }
+        const r = recompraDe(p);
+        if (r.un > 0 && p.status === 'deficit') { c.defRS += r.rs; c.nDef++; }
+    });
+
+    // Só entram CDs com pelo menos uma das duas dores (senão poluem o quadrante).
+    const lista = Object.values(porCD).filter(c => c.defRS > 0 || c.travado > 0);
+    if (!lista.length) { box.innerHTML = '<div class="empty-state">Nenhum CD com déficit ou capital travado nesta seleção.</div>'; return; }
+
+    const mediana = arr => {
+        const s = [...arr].sort((a, b) => a - b);
+        const m = Math.floor(s.length / 2);
+        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    };
+    const medDef = mediana(lista.map(c => c.defRS));
+    const medTrv = mediana(lista.map(c => c.travado));
+    const maxDef = Math.max(1, ...lista.map(c => c.defRS));
+    const maxTrv = Math.max(1, ...lista.map(c => c.travado));
+
+    lista.forEach(c => {
+        const altoDef = c.defRS >= medDef;
+        const altoTrv = c.travado >= medTrv;
+        c.quad = altoDef && altoTrv ? 'gargalo' : altoDef ? 'comprar' : altoTrv ? 'destravar' : 'equilibrado';
+        // Índice 0-100: média geométrica dos dois eixos normalizados. Só fica alto quando
+        // AS DUAS dores são altas ao mesmo tempo — é exatamente o que caracteriza o gargalo.
+        c.idx = Math.sqrt((c.defRS / maxDef) * (c.travado / maxTrv)) * 100;
+    });
+
+    const META = {
+        gargalo:     { lbl: 'Gargalo',     acao: 'comprar urgente E destravar o parado' },
+        comprar:     { lbl: 'Só comprar',  acao: 'déficit por volume, estoque limpo — repor' },
+        destravar:   { lbl: 'Destravar',   acao: 'parado sem ruptura — liquidar / remanejar' },
+        equilibrado: { lbl: 'Equilibrado', acao: 'sem dor relevante nos dois eixos' }
+    };
+
+    const celula = q => {
+        const g = lista.filter(c => c.quad === q).sort((a, b) => b.idx - a.idx);
+        const linhas = g.map(c => `
+            <div class="gq-cd gq-cd-link" data-cd="${escapeHtml(c.cd)}" title="Ver produtos do CD ${escapeHtml(c.cd)}">
+                <span class="gq-cd-nome">${escapeHtml(c.cd)}</span>
+                <span class="gq-cd-nums">
+                    <span class="gq-cd-def" title="${c.nDef} ${c.nDef === 1 ? 'item' : 'itens'} em déficit (&lt; 45d)">▲ ${formatBRLCheio(c.defRS)}</span>
+                    <span class="gq-cd-trv" title="${c.nEnc} ${c.nEnc === 1 ? 'item encalhado' : 'itens encalhados'} (&gt; 100d)">■ ${formatBRLCheio(c.travado)}</span>
+                </span>
+            </div>`).join('') || '<div class="gq-vazio">nenhum CD aqui</div>';
+        return `<div class="gq-cell gq-${q}">
+            <div class="gq-cell-head">
+                <span class="gq-cell-lbl">${META[q].lbl}</span>
+                <span class="gq-cell-cnt">${g.length}</span>
+            </div>
+            <div class="gq-cell-acao">${META[q].acao}</div>
+            ${g.length ? '<div class="gq-cell-cols"><span class="gq-cd-def">▲ déficit</span><span class="gq-cd-trv">■ excesso</span></div>' : ''}
+            <div class="gq-cell-body">${linhas}</div>
+        </div>`;
+    };
+
+    const garg = lista.filter(c => c.quad === 'gargalo');
+    const presoG = garg.reduce((s, c) => s + c.travado, 0);
+    const defG = garg.reduce((s, c) => s + c.defRS, 0);
+
+    box.innerHTML = `
+        <div class="gq-resumo ${garg.length ? 'gq-resumo-alto' : ''}">
+            <div class="gq-resumo-n">${garg.length}</div>
+            <div class="gq-resumo-txt">
+                <strong>${garg.length === 1 ? 'CD em gargalo' : 'CDs em gargalo'}</strong>: déficit crítico e capital parado convivendo no mesmo CD.
+                <span class="gq-resumo-cifras">${formatBRLCheio(presoG)} travado &middot; ${formatBRLCheio(defG)} a recomprar</span>
+            </div>
+        </div>
+        <div class="gq-legenda">
+            <span><span class="gq-tag-def">▲</span> déficit crítico a recomprar (itens &lt; 45 dias)</span>
+            <span><span class="gq-tag-trv">■</span> excesso / capital travado (&gt; 100 dias)</span>
+            <span class="gq-legenda-corte">corte = mediana de cada eixo &middot; déficit ${formatBRLCheio(medDef)} &middot; travado ${formatBRLCheio(medTrv)} &middot; clique num CD para ver seus produtos</span>
+        </div>
+        <div class="gq-matriz">
+            ${celula('comprar')}
+            ${celula('gargalo')}
+            ${celula('equilibrado')}
+            ${celula('destravar')}
+        </div>`;
+
+    // Clique num CD -> abre um modal com os produtos do CD SEPARADOS em dois blocos
+    // (necessidade de compra × excesso travado), com distinção visual clara.
+    box.querySelectorAll('.gq-cd-link').forEach(el => {
+        el.addEventListener('click', () => {
+            const cd = el.getAttribute('data-cd');
+            if (cd) abrirGargaloCD(cd);
+        });
+    });
+}
+
+// Drill-down do Gargalo: ao clicar num CD, abre um modal com os produtos SEPARADOS em
+// dois blocos — necessidade de compra (déficit < 45d) e excesso travado (> 100d) — em vez
+// de uma lista única ordenada. Mesma definição das colunas ▲/■ da matriz.
+function gqModalEsc(e) { if (e.key === 'Escape') fecharGargaloModal(); }
+function fecharGargaloModal() {
+    const back = document.getElementById('gqModalBackdrop');
+    if (back) back.remove();
+    document.body.style.overflow = '';
+    document.removeEventListener('keydown', gqModalEsc);
+}
+function abrirGargaloCD(cd) {
+    fecharGargaloModal();   // instância única
+    const prods = originalProducts.filter(p => p.cd === cd && (!filtroCurva.size || filtroCurva.has(p.curva)));
+
+    // BLOCO 1: necessidade de compra = déficit (< 45d) com recompra > 0, mais crítico primeiro.
+    const compra = prods.filter(p => p.status === 'deficit' && recompraDe(p).un > 0)
+        .map(p => ({ p, m: recompraDe(p) }))
+        .sort((a, b) => a.p.diasLivre - b.p.diasLivre);
+    // BLOCO 2: excesso travado = sem-giro (> 100d), maior capital parado primeiro.
+    const excesso = prods.filter(p => p.status === 'sem-giro')
+        .sort((a, b) => b.estoqueLivreRS - a.estoqueLivreRS);
+
+    const totCompraRS = compra.reduce((s, x) => s + x.m.rs, 0);
+    const totCompraUn = compra.reduce((s, x) => s + x.m.un, 0);
+    const totExcRS = excesso.reduce((s, p) => s + p.estoqueLivreRS, 0);
+
+    const tabCompra = compra.length ? `
+        <table class="cv-modal-table gq-sec-table">
+            <thead><tr>
+                <th>Produto</th>
+                <th class="cvm-num">Un a comprar</th>
+                <th class="cvm-num">R$ represado</th>
+                <th class="cvm-num">Cobertura</th>
+            </tr></thead>
+            <tbody>${compra.map(x => `
+                <tr>
+                    <td class="cvm-prod">${escapeHtml(rotuloProduto(x.p))}</td>
+                    <td class="cvm-un">${fmtUn(x.m.un)}</td>
+                    <td class="cvm-rs">${formatBRLCheio(x.m.rs)}</td>
+                    <td class="cvm-cob cvm-cob-def">≈ ${fmtUn(x.p.diasLivre)} d</td>
+                </tr>`).join('')}</tbody>
+        </table>` : '<div class="gq-sec-vazio">Nenhum item em déficit a comprar neste CD.</div>';
+
+    const tabExcesso = excesso.length ? `
+        <table class="cv-modal-table gq-sec-table">
+            <thead><tr>
+                <th>Produto</th>
+                <th class="cvm-num">Estoque livre</th>
+                <th class="cvm-num">R$ travado</th>
+                <th class="cvm-num">Cobertura</th>
+            </tr></thead>
+            <tbody>${excesso.map(p => `
+                <tr>
+                    <td class="cvm-prod">${escapeHtml(rotuloProduto(p))}</td>
+                    <td class="cvm-un gq-un-neutro">${fmtUn(p.estoqueLivre)} un</td>
+                    <td class="cvm-rs">${formatBRLCheio(p.estoqueLivreRS)}</td>
+                    <td class="cvm-cob cvm-cob-exc">≈ ${fmtUn(p.diasLivre)} d</td>
+                </tr>`).join('')}</tbody>
+        </table>` : '<div class="gq-sec-vazio">Nenhum item travado (> 100 dias) neste CD.</div>';
+
+    const html = `
+        <div class="cv-modal" role="dialog" aria-modal="true" aria-label="Gargalo do CD ${escapeHtml(cd)}">
+            <div class="cv-modal-head">
+                <div class="cv-modal-head-top">
+                    <div>
+                        <div class="cv-modal-eyebrow">Gargalo · CD</div>
+                        <div class="cv-modal-tot">${escapeHtml(cd)}</div>
+                    </div>
+                    <button type="button" class="cv-modal-x" aria-label="Fechar">×</button>
+                </div>
+                <div class="gq-tabs" role="tablist">
+                    <button type="button" class="gq-tab gq-tab-def active" data-sec="compra" role="tab"><span class="gq-tab-ico">▲</span> <strong>${compra.length}</strong> a comprar <span class="gq-tab-rs">${formatBRLCheio(totCompraRS)}</span></button>
+                    <button type="button" class="gq-tab gq-tab-trv" data-sec="excesso" role="tab"><span class="gq-tab-ico">■</span> <strong>${excesso.length}</strong> em excesso <span class="gq-tab-rs">${formatBRLCheio(totExcRS)}</span></button>
+                </div>
+            </div>
+            <div class="cv-modal-body">
+                <div class="gq-sec gq-sec-compra" data-sec="compra">
+                    <div class="gq-sec-hint">déficit &lt; 45 dias · mais crítico primeiro</div>
+                    ${tabCompra}
+                </div>
+                <div class="gq-sec gq-sec-excesso gq-sec-hidden" data-sec="excesso">
+                    <div class="gq-sec-hint">&gt; 100 dias · maior capital primeiro</div>
+                    ${tabExcesso}
+                </div>
+            </div>
+            <div class="cv-modal-foot">Os dois lados do gargalo, separados: o que falta repor (▲) e o que está parado (■). Mesma conta da aba Sugestões e do Mapa por CD.</div>
+        </div>`;
+
+    const back = document.createElement('div');
+    back.className = 'cv-modal-backdrop';
+    back.id = 'gqModalBackdrop';
+    back.innerHTML = html;
+    document.body.appendChild(back);
+    document.body.style.overflow = 'hidden';
+
+    back.addEventListener('click', e => { if (e.target === back) fecharGargaloModal(); });
+    back.querySelector('.cv-modal-x').addEventListener('click', fecharGargaloModal);
+    document.addEventListener('keydown', gqModalEsc);
+
+    // Abas: clicar em "a comprar" / "em excesso" troca qual bloco aparece (sem rolar até o fim).
+    back.querySelectorAll('.gq-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            const sec = tab.getAttribute('data-sec');
+            back.querySelectorAll('.gq-tab').forEach(t => t.classList.toggle('active', t === tab));
+            back.querySelectorAll('.gq-sec').forEach(s => s.classList.toggle('gq-sec-hidden', s.getAttribute('data-sec') !== sec));
+            back.querySelector('.cv-modal-body').scrollTop = 0;
+        });
+    });
+}
+
+// ============================================
+// O QUE MUDOU (atual × base anterior)
+// ============================================
+function updateMudancas() {
+    const box = document.getElementById('mudancasContent');
+    if (!box) return;
+    if (!dashboardData) { box.innerHTML = '<div class="empty-state">Carregue uma planilha para comparar com a base anterior.</div>'; return; }
+    if (!cmpAtual) { box.innerHTML = '<div class="empty-state">Preparando comparação…</div>'; return; }
+    if (!cmpAnterior) {
+        box.innerHTML = `<div class="mudancas-primeira">
+            <div class="mudancas-primeira-ic">🗂️</div>
+            <div class="mudancas-primeira-tit">Esta é a primeira base guardada neste navegador</div>
+            <div class="mudancas-primeira-txt">O painel guardou o retrato da base <strong>${escapeHtml(cmpAtual.dataRef)}</strong>. Quando você carregar uma base mais nova aqui, esta aba mostra exatamente o que mudou: o que entrou em déficit, o que drenou, e como mexeu a recompra represada.</div>
+        </div>`;
+        return;
+    }
+
+    if (cmpAnterior.metaRef !== META_REF_COMPARATIVO || cmpAtual.metaRef !== META_REF_COMPARATIVO) {
+        box.innerHTML = `<div class="mudancas-primeira">
+            <div class="mudancas-primeira-ic">🔄</div>
+            <div class="mudancas-primeira-tit">Base anterior salva em outra meta</div>
+            <div class="mudancas-primeira-txt">O retrato da base <strong>${escapeHtml(cmpAnterior.dataRef)}</strong> foi guardado numa versão anterior, em prazo diferente de ${META_REF_COMPARATIVO} dias. Reabra essa planilha uma vez no Antigravity para regravar o retrato a ${META_REF_COMPARATIVO} dias — aí a comparação volta a aparecer no mesmo prazo.</div>
+        </div>`;
+        return;
+    }
+
+    const A = cmpAtual, B = cmpAnterior;   // A = atual, B = anterior
+    const dRecompra = A.totais.recompraRS - B.totais.recompraRS;
+    const dProblema = A.totais.capProblema - B.totais.capProblema;
+    const dAtencao = A.totais.capAtencao - B.totais.capAtencao;
+    const pRecompra = B.totais.recompraRS > 0 ? (dRecompra / B.totais.recompraRS * 100) : Infinity;
+    const pProblema = B.totais.capProblema > 0 ? (dProblema / B.totais.capProblema * 100) : Infinity;
+    const pAtencao = B.totais.capAtencao > 0 ? (dAtencao / B.totais.capAtencao * 100) : Infinity;
+
+    // União de SKUs e transições de faixa
+    const skus = new Set([...Object.keys(A.porSku), ...Object.keys(B.porSku)]);
+    let entItens = 0, entRS = 0;       // entraram em déficit
+    let saiItens = 0, saiRS = 0;       // saíram de déficit
+    let virouEnc = 0, virouEncRS = 0;  // viraram encalhado (>100d)
+    let drenouEnc = 0, drenouEncRS = 0;// drenaram (saíram de encalhado)
+    const subiu = [], desceu = [], novos = [], sumiu = [];
+
+    skus.forEach(k => {
+        const a = A.porSku[k], b = B.porSku[k];
+        const sa = a ? a.status : null, sb = b ? b.status : null;
+        const rsA = a ? a.recompraRS : 0, rsB = b ? b.recompraRS : 0;
+        const dRS = rsA - rsB;
+
+        if (a && !b) { if (rsA > 0) novos.push({ ...a, dRS: rsA }); }
+        else if (!a && b) { if (rsB > 0) sumiu.push({ ...b, dRS: -rsB }); }
+        else {
+            const ehDef = s => s === 'deficit';
+            const ehEnc = s => s === 'sem-giro';
+            if (!ehDef(sb) && ehDef(sa)) { entItens++; entRS += rsA; }
+            if (ehDef(sb) && !ehDef(sa)) { saiItens++; saiRS += rsB; }
+            if (!ehEnc(sb) && ehEnc(sa)) { virouEnc++; virouEncRS += a.capRS; }
+            if (ehEnc(sb) && !ehEnc(sa)) { drenouEnc++; drenouEncRS += b.capRS; }
+            if (dRS > 0) subiu.push({ ...a, dRS, statusAnt: sb });
+            else if (dRS < 0) desceu.push({ ...a, dRS, statusAnt: sb, rsB });
+        }
+    });
+
+    subiu.sort((x, y) => y.dRS - x.dRS);
+    desceu.sort((x, y) => x.dRS - y.dRS);
+    novos.sort((x, y) => y.dRS - x.dRS);
+    sumiu.sort((x, y) => x.dRS - y.dRS);
+
+    const STBADGE = {
+        deficit: ['Déficit', 'st-deficit'], saudavel: ['45–60d', 'st-saud'], reposicao: ['Reposição', 'st-repo'],
+        excesso: ['Atenção', 'st-exc'], 'sem-giro': ['Encalhado', 'st-enc'], 'sem-sinal': ['Sem sinal', 'st-sinal'], 'parado': ['Parado', 'st-parado']
+    };
+    const badge = st => { const b = STBADGE[st] || [st, '']; return `<span class="mud-badge ${b[1]}">${b[0]}</span>`; };
+
+    const linhaSku = (s, mostraAnt) => `
+        <div class="mud-item">
+            <div class="mud-item-main">
+                <span class="mud-item-nome">${escapeHtml(s.material)}</span>
+                <span class="mud-item-trans">${mostraAnt && s.statusAnt ? badge(s.statusAnt) + '<span class="mud-arrow">→</span>' : ''}${badge(s.status)}</span>
+            </div>
+            <div class="mud-item-side">
+                <span class="mud-item-rs ${classeDelta(s.dRS, true)}">${fmtSinalRS(s.dRS)}</span>
+                <span class="mud-item-sub">${s.nCD || 0} CDs · sell-out ${(s.sellout || 0).toLocaleString('pt-BR')}/mês</span>
+            </div>
+        </div>`;
+
+    const listaOuVazio = (arr, render, vazio, mostraAnt) =>
+        arr.length ? arr.slice(0, 12).map(s => render(s, mostraAnt)).join('') : `<div class="mud-vazio">${vazio}</div>`;
+
+    // Movimento por CD
+    const cdsKeys = new Set([...Object.keys(A.porCD), ...Object.keys(B.porCD)]);
+    const cdMov = [];
+    cdsKeys.forEach(k => {
+        const a = A.porCD[k], b = B.porCD[k];
+        const d = (a ? a.recompraRS : 0) - (b ? b.recompraRS : 0);
+        if (Math.abs(d) >= 1) cdMov.push({ cd: k, d, atual: a ? a.recompraRS : 0 });
+    });
+    cdMov.sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
+
+    box.innerHTML = `
+        <div class="mud-cab">
+            Comparando <strong>${escapeHtml(A.dataRef)}</strong> com <strong>${escapeHtml(B.dataRef)}</strong>
+            <span class="mud-cab-sub">retratos guardados automaticamente neste navegador</span>
+        </div>
+
+        <div class="mud-kpis">
+            <div class="mud-kpi">
+                <div class="mud-kpi-lbl">Recompra represada</div>
+                <div class="mud-kpi-val">${formatBRLCheio(A.totais.recompraRS)}</div>
+                <div class="mud-kpi-delta ${classeDelta(dRecompra, true)}">${fmtSinalRS(dRecompra)} <span>(${fmtPct(pRecompra)})</span></div>
+            </div>
+            <div class="mud-kpi">
+                <div class="mud-kpi-lbl">Capital travado (&gt; 100d)</div>
+                <div class="mud-kpi-val">${formatBRLCheio(A.totais.capProblema)}</div>
+                <div class="mud-kpi-delta ${classeDelta(dProblema, true)}">${fmtSinalRS(dProblema)} <span>(${fmtPct(pProblema)})</span></div>
+            </div>
+            <div class="mud-kpi">
+                <div class="mud-kpi-lbl">Capital em atenção (60–100d)</div>
+                <div class="mud-kpi-val">${formatBRLCheio(A.totais.capAtencao)}</div>
+                <div class="mud-kpi-delta ${classeDelta(dAtencao, true)}">${fmtSinalRS(dAtencao)} <span>(${fmtPct(pAtencao)})</span></div>
+            </div>
+        </div>
+
+        <div class="mud-transicoes">
+            <div class="mud-trans-card mud-trans-ruim">
+                <div class="mud-trans-num">${entItens}</div>
+                <div class="mud-trans-lbl">entraram em déficit</div>
+                <div class="mud-trans-rs">+${formatBRLCheio(entRS).replace('R$ ', 'R$ ')} de recompra nova</div>
+            </div>
+            <div class="mud-trans-card mud-trans-bom">
+                <div class="mud-trans-num">${saiItens}</div>
+                <div class="mud-trans-lbl">saíram de déficit</div>
+                <div class="mud-trans-rs">−${formatBRLCheio(saiRS).replace('R$ ', 'R$ ')} de recompra resolvida</div>
+            </div>
+            <div class="mud-trans-card mud-trans-ruim">
+                <div class="mud-trans-num">${virouEnc}</div>
+                <div class="mud-trans-lbl">viraram encalhado (&gt;100d)</div>
+                <div class="mud-trans-rs">${formatBRLCheio(virouEncRS)} de capital novo travado</div>
+            </div>
+            <div class="mud-trans-card mud-trans-bom">
+                <div class="mud-trans-num">${drenouEnc}</div>
+                <div class="mud-trans-lbl">drenaram (saíram de encalhado)</div>
+                <div class="mud-trans-rs">${formatBRLCheio(drenouEncRS)} de capital destravado</div>
+            </div>
+        </div>
+
+        <div class="mud-colunas">
+            <div class="mud-col">
+                <div class="mud-col-tit"><span class="delta-ruim">▲</span> Subiu a recompra represada</div>
+                <div class="mud-col-sub">SKUs que mais aumentaram a necessidade de compra</div>
+                ${listaOuVazio(subiu, linhaSku, 'Nada subiu de forma relevante.', true)}
+            </div>
+            <div class="mud-col">
+                <div class="mud-col-tit"><span class="delta-bom">▼</span> Drenou / melhorou</div>
+                <div class="mud-col-sub">SKUs que mais reduziram a recompra represada</div>
+                ${listaOuVazio(desceu, linhaSku, 'Nada drenou de forma relevante.', true)}
+            </div>
+        </div>
+
+        ${(novos.length || sumiu.length) ? `
+        <div class="mud-colunas">
+            <div class="mud-col">
+                <div class="mud-col-tit">Apareceram na base</div>
+                <div class="mud-col-sub">SKUs com recompra que não existiam na base anterior</div>
+                ${listaOuVazio(novos, linhaSku, 'Nenhum SKU novo com recompra.', false)}
+            </div>
+            <div class="mud-col">
+                <div class="mud-col-tit">Saíram da base</div>
+                <div class="mud-col-sub">SKUs que tinham recompra e não estão mais</div>
+                ${listaOuVazio(sumiu, linhaSku, 'Nenhum SKU sumiu.', false)}
+            </div>
+        </div>` : ''}
+
+        ${cdMov.length ? `
+        <div class="mud-cdmov">
+            <div class="mud-col-tit">Movimento por CD (recompra represada)</div>
+            <div class="mud-cdmov-grid">
+                ${cdMov.slice(0, 12).map(c => `
+                    <div class="mud-cdmov-item">
+                        <span class="mud-cdmov-cd">${escapeHtml(c.cd)}</span>
+                        <span class="mud-cdmov-d ${classeDelta(c.d, true)}">${fmtSinalRS(c.d)}</span>
+                    </div>`).join('')}
+            </div>
+        </div>` : ''}
+    `;
+}
+
 function handleTabClick(e) {
     const tab = e.target.getAttribute('data-tab');
     tabButtons.forEach(b => b.classList.remove('active'));
@@ -2590,6 +3892,10 @@ function handleTabClick(e) {
     document.getElementById(tab).classList.add('active');
     if (tab === 'cd-sales') renderVendasCD();
     if (tab === 'ritmo') updateRitmo();
+    if (tab === 'cockpit') updateCockpit();
+    if (tab === 'mapa-cd') updateMapaCD();
+    if (tab === 'gargalo') updateGargalo();
+    if (tab === 'mudancas') updateMudancas();
 }
 
 // ============================================
@@ -2608,13 +3914,13 @@ function escapeHtml(str) {
 }
 
 function formatStatus(status) {
-    return { deficit: 'Compra', saudavel: 'Compra', reposicao: 'Em reposição', excesso: 'Atenção', 'sem-giro': 'Problema' }[status] || status;
+    return { deficit: 'Compra', saudavel: 'Compra', reposicao: 'Em reposição', excesso: 'Atenção', 'sem-giro': 'Problema', 'sem-sinal': 'Sem sinal', 'parado': 'Parado' }[status] || status;
 }
 
 // Classe de cor pela faixa EXIBIDA (compra/atencao/problema), para o badge não sair
 // com duas cores no "Compra" (déficit vermelho + saudável verde).
 function statusGrupo(status) {
-    return { deficit: 'compra', saudavel: 'compra', reposicao: 'reposicao', excesso: 'atencao', 'sem-giro': 'problema' }[status] || status;
+    return { deficit: 'compra', saudavel: 'compra', reposicao: 'reposicao', excesso: 'atencao', 'sem-giro': 'problema', 'sem-sinal': 'sem-sinal', 'parado': 'parado' }[status] || status;
 }
 
 // ============================================
@@ -2761,6 +4067,13 @@ function exportarExcel() {
 
 function formatBRL(v) {
     return 'R$ ' + (v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Formata quantidade em UNIDADES no padrão pt-BR: separador de milhar (ponto) só depois
+// do 3o dígito; vírgula decimal apenas quando há fração. Ex.: 12729 -> "12.729";
+// 63 -> "63"; 63,4 -> "63,4". Substitui toFixed, que não agrupa milhar e força ".0".
+function fmtUn(x, dec = 0) {
+    return Number(x || 0).toLocaleString('pt-BR', { maximumFractionDigits: dec, minimumFractionDigits: 0 });
 }
 
 function formatBRLShort(v) {

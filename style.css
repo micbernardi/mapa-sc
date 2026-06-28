@@ -38,7 +38,7 @@
     --radius: 14px;
     --radius-sm: 9px;
     --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    --tabs-h: 56px;   /* altura da barra de abas (offset do cabeçalho fixo) */
+    --tabs-h: 104px;   /* altura do header sticky: abas + barra global de Curva (offset dos filtros internos) */
 }
 
 body {
@@ -146,6 +146,28 @@ body {
     display: flex;
     overflow-x: auto;
     padding: 0;
+}
+
+/* Barra global de Curva: dentro do header sticky, vale para todas as abas */
+.global-filter-row {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0.4rem 1.4rem 0.5rem;
+    border-top: 1px solid var(--border-soft);
+}
+.global-filter-lbl {
+    font-size: 0.75rem; font-weight: 700; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.05em;
+}
+.ms-global { width: 210px; flex-shrink: 0; }
+.ms-global .ms-toggle { padding: 0.42rem 0.7rem; font-size: 0.85rem; }
+.global-filter-hint { font-size: 0.74rem; color: var(--text-tertiary); }
+@media (max-width: 768px) {
+    .global-filter-hint { display: none; }
+    .ms-global { width: 160px; }
 }
 
 .tab-btn {
@@ -769,6 +791,19 @@ canvas {
     background: rgba(100, 116, 139, 0.12);
     color: #475569;
 }
+/* Sem sinal de venda (media ponderada <= 0): visual neutro e tracejado, distinto do
+   encalhado (cinza solido) e do deficit (vermelho). Sinaliza "sem dado de demanda". */
+.status-badge.sem-sinal {
+    background: transparent;
+    color: #94a3b8;
+    border: 1px dashed #cbd5e1;
+}
+/* Parado (vendeu na janela mas sem giro recente): violeta, distinto do deficit (vermelho),
+   do encalhado (cinza) e do sem-sinal (tracejado). Sinaliza "parou de vender, nao comprar". */
+.status-badge.parado {
+    background: rgba(124, 58, 237, 0.10);
+    color: #6d28d9;
+}
 
 /* Linha de status nos cards de CD */
 .cd-status-row {
@@ -923,6 +958,114 @@ canvas {
     color: var(--text-secondary);
     margin-top: 0.5rem;
     text-align: center;
+}
+
+/* Gráfico interativo: observação "Top 5 marcas" por mês */
+.chart-wrap { position: relative; }
+.bar-hit { cursor: pointer; }
+.bar-hit:hover { fill: rgba(37, 99, 235, 0.06); }
+
+.chart-hint {
+    font-size: 0.72rem;
+    color: var(--text-tertiary);
+    margin-top: 0.35rem;
+    text-align: center;
+    line-height: 1.4;
+}
+
+.chart-tip {
+    position: fixed;
+    z-index: 2000;
+    min-width: 270px;
+    max-width: 340px;
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    padding: 0.7rem 0.8rem 0.75rem;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity .12s ease, transform .12s ease;
+    pointer-events: none;
+}
+.chart-tip.show { opacity: 1; transform: translateY(0); }
+.chart-tip .tip-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.45rem;
+    border-bottom: 1px solid var(--border-soft);
+}
+.chart-tip .tip-total {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.chart-tip .tip-parcial {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--reposicao);
+    background: rgba(8, 145, 178, 0.12);
+    padding: 0.05rem 0.3rem;
+    border-radius: 4px;
+}
+.chart-tip .tip-list { display: flex; flex-direction: column; gap: 0.32rem; }
+.chart-tip .tip-row {
+    display: grid;
+    grid-template-columns: 1.1rem 1fr auto;
+    align-items: center;
+    gap: 0.5rem;
+}
+.chart-tip .tip-rank {
+    width: 1.1rem; height: 1.1rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.66rem; font-weight: 800;
+    color: var(--text-secondary);
+    background: var(--bg-subtle);
+    border-radius: 50%;
+}
+.chart-tip .tip-name { min-width: 0; }
+.chart-tip .tip-name-txt {
+    display: block;
+    font-size: 0.76rem;
+    color: var(--text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chart-tip .tip-bar {
+    display: block;
+    height: 3px;
+    margin-top: 2px;
+    background: var(--border-soft);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.chart-tip .tip-bar i { display: block; height: 100%; border-radius: 2px; }
+.chart-tip .tip-val {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    text-align: right;
+    white-space: nowrap;
+    line-height: 1.05;
+}
+.chart-tip .tip-val small {
+    display: block;
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+}
+.chart-tip .tip-empty {
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+    padding: 0.25rem 0;
 }
 
 /* Detalhe título com badge */
@@ -1632,4 +1775,483 @@ canvas {
     .ritmo-rbuy { flex-basis: 54px; }
     .ritmo-rcob-h b, .ritmo-rbuy b { font-size: 0.95rem; }
     .ritmo-pill { font-size: 0.66rem; padding: 3px 8px; }
+}
+
+/* ============================================
+   COCKPIT · MAPA POR CD · O QUE MUDOU
+   ============================================ */
+
+/* Deltas compartilhados: em recompra/capital travado, SUBIR é ruim. */
+.delta-ruim { color: var(--deficit); }
+.delta-bom { color: var(--saudavel); }
+.delta-flat { color: var(--text-tertiary); }
+.delta-novo { color: var(--primary); font-weight: 700; }
+
+/* ---------- COCKPIT ---------- */
+.cockpit-filtro-aviso {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
+    border-radius: var(--radius-sm); padding: 0.7rem 1rem; margin-bottom: 1.25rem;
+    font-size: 0.82rem; font-weight: 500;
+}
+.cockpit-limpa-filtro {
+    background: var(--excesso); color: #fff; border: none; border-radius: 7px;
+    padding: 0.3rem 0.8rem; font-size: 0.78rem; font-weight: 600; cursor: pointer;
+    font-family: var(--font);
+}
+.cockpit-limpa-filtro:hover { background: var(--excesso-light); }
+
+.cockpit-hero {
+    position: relative; overflow: hidden;
+    background:
+        radial-gradient(120% 140% at 0% 0%, rgba(37,99,235,0.07) 0%, rgba(37,99,235,0) 55%),
+        var(--bg-card);
+    border: 1px solid var(--border); border-left: 4px solid var(--primary);
+    border-radius: var(--radius); box-shadow: var(--shadow-md);
+    padding: 1.9rem 2rem; margin-bottom: 1.5rem;
+}
+.cockpit-hero-eyebrow {
+    text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.72rem;
+    font-weight: 700; color: var(--primary); margin-bottom: 0.55rem;
+}
+.cockpit-hero-value {
+    font-size: clamp(2.6rem, 6vw, 3.9rem); font-weight: 800; line-height: 1;
+    letter-spacing: -0.03em; color: var(--text-primary);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.cockpit-hero-delta {
+    display: inline-flex; align-items: baseline; gap: 8px; margin-top: 0.65rem;
+    font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.cockpit-hero-delta-pct { font-size: 0.92rem; font-weight: 600; }
+.cockpit-hero-delta-base { font-size: 0.78rem; font-weight: 500; color: var(--text-tertiary); margin-left: 4px; }
+.cockpit-hero-sub {
+    margin-top: 0.85rem; max-width: 60ch; font-size: 0.9rem; line-height: 1.5;
+    color: var(--text-secondary);
+}
+.cockpit-hero-sub strong { color: var(--text-primary); font-weight: 700; }
+.cockpit-hero-pend {
+    display: flex; align-items: flex-start; gap: 9px;
+    margin-top: 0.7rem; max-width: 70ch; font-size: 0.86rem; line-height: 1.5;
+    color: var(--text-secondary);
+}
+.cockpit-hero-pend strong { color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
+.cockpit-hero-pend-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--reposicao);
+    flex-shrink: 0; margin-top: 7px;
+}
+.cockpit-hero-nucleo {
+    margin-top: 1.1rem; padding: 0.8rem 1rem; border-radius: var(--radius-sm);
+    background: #fef2f2; border: 1px solid #fecaca; color: #7f1d1d;
+    font-size: 0.88rem; line-height: 1.5;
+}
+.cockpit-hero-nucleo strong { color: var(--deficit); font-weight: 800; font-variant-numeric: tabular-nums; }
+.cockpit-hero-nucleo.nucleo-alto { background: #fef2f2; }
+
+.cockpit-comp {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.3rem 1.5rem; margin-bottom: 1.5rem;
+}
+.cockpit-comp-head {
+    font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.8rem;
+}
+.cockpit-comp-bar {
+    display: flex; height: 30px; border-radius: 8px; overflow: hidden;
+    background: var(--bg-subtle); gap: 2px;
+}
+.cockpit-seg {
+    display: flex; align-items: center; justify-content: center; min-width: 2px;
+    color: #fff; font-size: 0.72rem; font-weight: 700; white-space: nowrap;
+    font-variant-numeric: tabular-nums; overflow: hidden;
+}
+.cockpit-comp-leg { display: flex; flex-wrap: wrap; gap: 1.2rem; margin-top: 0.85rem; }
+.cockpit-leg { display: inline-flex; align-items: center; gap: 7px; font-size: 0.8rem; color: var(--text-secondary); }
+.cockpit-leg strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.cockpit-leg-dot { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+
+.cockpit-cards {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 1.1rem; margin-bottom: 1.25rem;
+}
+.cockpit-card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 1.2rem 1.3rem;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+.cockpit-card-link { cursor: pointer; }
+.cockpit-card-link:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); transform: translateY(-1px); }
+.cockpit-card-val {
+    font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1;
+    color: var(--primary); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.cockpit-card-val.sem-giro { color: var(--deficit); }
+.cockpit-card-val.excesso { color: var(--excesso); }
+.cockpit-card-lbl { margin-top: 0.4rem; font-size: 0.82rem; font-weight: 600; color: var(--text-primary); line-height: 1.35; }
+.cockpit-card-meta { margin-top: 0.3rem; font-size: 0.74rem; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.cockpit-card-delta { margin-top: 0.55rem; font-size: 0.76rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cockpit-foot { font-size: 0.74rem; color: var(--text-tertiary); line-height: 1.5; }
+
+/* ---------- MAPA POR CD ---------- */
+.mapa-resumo { display: flex; flex-wrap: wrap; gap: 1.1rem; margin-bottom: 1.4rem; }
+.mapa-resumo-item {
+    flex: 1 1 220px; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.3rem;
+}
+.mapa-resumo-val { font-size: 1.5rem; font-weight: 800; color: var(--primary); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mapa-resumo-lbl { margin-top: 0.3rem; font-size: 0.8rem; color: var(--text-secondary); font-weight: 500; }
+
+.mapa-list { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.mapa-row { display: flex; align-items: center; gap: 14px; padding: 0.95rem 1.3rem; border-bottom: 1px solid var(--border-soft); }
+.mapa-row:last-child { border-bottom: none; }
+.mapa-row:hover { background: var(--bg-subtle); }
+.mapa-rank {
+    flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-subtle); color: var(--text-secondary);
+    font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.mapa-row:nth-child(1) .mapa-rank { background: var(--primary); color: #fff; }
+.mapa-row:nth-child(2) .mapa-rank, .mapa-row:nth-child(3) .mapa-rank { background: #dbeafe; color: var(--primary-dark); }
+.mapa-main { flex: 1; min-width: 0; }
+.mapa-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 0.4rem; }
+.mapa-cd { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); }
+.mapa-val { font-size: 0.95rem; font-weight: 800; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mapa-delta { font-size: 0.78rem; font-weight: 700; margin-left: 6px; }
+.mapa-bar-track { height: 7px; background: var(--bg-subtle); border-radius: 4px; overflow: hidden; }
+.mapa-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary-light), var(--primary)); border-radius: 4px; }
+.mapa-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; margin-top: 0.45rem; font-size: 0.76rem; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.mapa-meta strong { color: var(--text-secondary); }
+.mapa-meta-cap strong.sem-giro { color: var(--deficit); }
+.mapa-meta-cap strong.excesso { color: var(--excesso); }
+.mapa-meta-tag {
+    font-weight: 700; color: var(--primary); text-transform: uppercase;
+    letter-spacing: 0.03em; font-size: 0.7rem;
+}
+
+/* ---------- O QUE MUDOU ---------- */
+.mudancas-primeira {
+    text-align: center; max-width: 50ch; margin: 3rem auto;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 2.5rem 2rem;
+}
+.mudancas-primeira-ic { font-size: 2.4rem; margin-bottom: 0.8rem; }
+.mudancas-primeira-tit { font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.7rem; }
+.mudancas-primeira-txt { font-size: 0.9rem; line-height: 1.6; color: var(--text-secondary); }
+.mudancas-primeira-txt strong { color: var(--text-primary); }
+
+.mud-cab { font-size: 0.95rem; color: var(--text-primary); margin-bottom: 1.25rem; }
+.mud-cab strong { font-weight: 700; }
+.mud-cab-sub { display: block; font-size: 0.78rem; color: var(--text-tertiary); margin-top: 2px; }
+
+.mud-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.1rem; margin-bottom: 1.4rem; }
+.mud-kpi { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.3rem; }
+.mud-kpi-lbl { font-size: 0.78rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em; }
+.mud-kpi-val { font-size: 1.55rem; font-weight: 800; color: var(--text-primary); margin-top: 0.35rem; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mud-kpi-delta { font-size: 0.92rem; font-weight: 700; margin-top: 0.35rem; font-variant-numeric: tabular-nums; }
+.mud-kpi-delta span { font-size: 0.82rem; font-weight: 600; }
+
+.mud-transicoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.6rem; }
+.mud-trans-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.2rem; border-top: 3px solid var(--border-strong); }
+.mud-trans-ruim { border-top-color: var(--deficit); }
+.mud-trans-bom { border-top-color: var(--saudavel); }
+.mud-trans-num { font-size: 1.8rem; font-weight: 800; line-height: 1; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.mud-trans-lbl { font-size: 0.83rem; font-weight: 600; color: var(--text-primary); margin-top: 0.4rem; }
+.mud-trans-rs { font-size: 0.74rem; color: var(--text-tertiary); margin-top: 0.25rem; font-variant-numeric: tabular-nums; }
+
+.mud-colunas { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.6rem; }
+.mud-col { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.2rem 1.3rem; }
+.mud-col-tit { font-size: 0.9rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 7px; }
+.mud-col-sub { font-size: 0.75rem; color: var(--text-tertiary); margin: 0.2rem 0 0.9rem; }
+.mud-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0.6rem 0; border-bottom: 1px solid var(--border-soft); }
+.mud-item:last-child { border-bottom: none; }
+.mud-item-main { min-width: 0; flex: 1; }
+.mud-item-nome { display: block; font-size: 0.84rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mud-item-trans { display: inline-flex; align-items: center; gap: 5px; margin-top: 3px; }
+.mud-arrow { color: var(--text-tertiary); font-size: 0.75rem; }
+.mud-item-side { text-align: right; flex-shrink: 0; }
+.mud-item-rs { display: block; font-size: 0.88rem; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mud-item-sub { font-size: 0.7rem; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.mud-vazio { font-size: 0.82rem; color: var(--text-tertiary); padding: 0.8rem 0; }
+
+.mud-badge { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 0.68rem; font-weight: 700; }
+.st-deficit { background: #fee2e2; color: #991b1b; }
+.st-saud { background: #ffedd5; color: #9a3412; }
+.st-repo { background: #cffafe; color: #155e75; }
+.st-exc { background: #dcfce7; color: #166534; }
+.st-enc { background: #fee2e2; color: #7f1d1d; }
+.st-sinal { background: #f1f5f9; color: #64748b; }
+.st-parado { background: #ede9fe; color: #6d28d9; }
+
+.mud-cdmov { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.2rem 1.3rem; }
+.mud-cdmov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.6rem; margin-top: 0.8rem; }
+.mud-cdmov-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0.5rem 0.7rem; background: var(--bg-subtle); border-radius: 8px; }
+.mud-cdmov-cd { font-size: 0.82rem; font-weight: 700; color: var(--text-primary); }
+.mud-cdmov-d { font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 720px) {
+    .mud-colunas { grid-template-columns: 1fr; }
+    .cockpit-hero { padding: 1.4rem 1.3rem; }
+    .cockpit-hero-value { white-space: normal; }
+}
+
+/* ===== Cockpit: faixa de giro (com giro x sem histórico de venda) ===== */
+.cockpit-giro {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.4rem;
+    margin: 0 0 1.1rem; padding: 0.7rem 1rem;
+    background: var(--bg-subtle); border-radius: var(--radius-sm);
+    font-size: 0.86rem;
+}
+.cockpit-giro-ok { color: var(--saudavel); display: inline-flex; align-items: center; gap: 7px; }
+.cockpit-giro-ok strong { font-weight: 800; font-variant-numeric: tabular-nums; }
+.cockpit-giro-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--saudavel); display: inline-block; flex: none; }
+.cockpit-giro-alerta { color: var(--text-secondary); }
+
+/* ===== Cockpit: recompra represada por curva ===== */
+.cockpit-curva { margin: 0 0 1.1rem; }
+.cockpit-curva-head {
+    font-size: 0.78rem; font-weight: 700; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.6rem;
+}
+.cockpit-curva-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.cockpit-curva-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-top: 3px solid var(--primary); border-radius: var(--radius); padding: 0.85rem 1rem;
+}
+.cockpit-curva-card.cv-A { border-top-color: var(--primary-dark); }
+.cockpit-curva-card.cv-B { border-top-color: var(--primary); }
+.cockpit-curva-card.cv-C { border-top-color: var(--primary-light); }
+.cockpit-curva-letra { font-size: 0.8rem; font-weight: 700; color: var(--text-secondary); }
+.cockpit-curva-val { font-size: 1.4rem; font-weight: 800; color: var(--text-primary); font-variant-numeric: tabular-nums; margin: 2px 0; line-height: 1.1; }
+.cockpit-curva-meta { font-size: 0.75rem; color: var(--text-tertiary); }
+.cockpit-curva-def { font-size: 0.78rem; color: var(--deficit); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+/* ===== Mapa de Gargalo (déficit crítico × capital travado) ===== */
+.gq-resumo {
+    display: flex; align-items: center; gap: 1.1rem;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.1rem 1.4rem; margin-bottom: 1rem;
+    box-shadow: var(--shadow-xs);
+}
+.gq-resumo-alto { border-color: #fecaca; background: #fef6f6; }
+.gq-resumo-n {
+    font-size: 2.6rem; font-weight: 800; line-height: 1; min-width: 1.3em; text-align: center;
+    color: var(--deficit); font-variant-numeric: tabular-nums;
+}
+.gq-resumo-txt { font-size: 0.95rem; color: var(--text-secondary); line-height: 1.45; }
+.gq-resumo-txt strong { color: var(--text-primary); font-weight: 700; }
+.gq-resumo-cifras { display: block; margin-top: 2px; font-size: 0.85rem; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+
+.gq-legenda {
+    display: flex; flex-wrap: wrap; gap: 1.2rem; align-items: center;
+    font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.9rem; padding: 0 0.2rem;
+}
+.gq-tag-def { color: var(--deficit); font-weight: 700; margin-right: 3px; }
+.gq-tag-trv { color: #64748b; font-weight: 700; margin-right: 3px; }
+.gq-legenda-corte { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+
+.gq-matriz {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+    grid-template-areas: "comprar gargalo" "equilibrado destravar";
+}
+.gq-comprar { grid-area: comprar; }
+.gq-gargalo { grid-area: gargalo; }
+.gq-equilibrado { grid-area: equilibrado; }
+.gq-destravar { grid-area: destravar; }
+
+.gq-cell {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-top: 3px solid var(--border-strong);
+    border-radius: var(--radius); padding: 0.9rem 1.1rem;
+}
+.gq-gargalo { border-top-color: var(--deficit); background: #fffafa; }
+.gq-comprar { border-top-color: var(--primary); }
+.gq-destravar { border-top-color: #64748b; }
+.gq-equilibrado { border-top-color: var(--border-strong); }
+
+.gq-cell-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1px; }
+.gq-cell-lbl { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); }
+.gq-cell-cnt {
+    font-size: 0.78rem; font-weight: 700; color: var(--text-secondary);
+    background: var(--bg-subtle); border-radius: 999px; padding: 1px 9px; font-variant-numeric: tabular-nums;
+}
+.gq-gargalo .gq-cell-cnt { background: #fee2e2; color: #b91c1c; }
+.gq-cell-acao { font-size: 0.78rem; color: var(--text-tertiary); margin-bottom: 0.7rem; }
+
+/* Cabecalho das duas colunas de valor (deficit vermelho / excesso cinza), alinhado a
+   direita sobre os numeros de cada CD. Tira a ambiguidade de qual valor e qual. */
+.gq-cell-cols {
+    display: flex; justify-content: flex-end; gap: 12px;
+    font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+    padding: 0 0.55rem 0.35rem; white-space: nowrap;
+}
+
+.gq-cell-body { display: flex; flex-direction: column; gap: 2px; }
+.gq-cd {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 0.42rem 0.55rem; border-radius: var(--radius-sm);
+}
+.gq-cd-link { cursor: pointer; transition: background 0.12s ease; }
+.gq-cd-link:hover { background: var(--bg-subtle); }
+.gq-cd-link:active { transform: scale(0.99); }
+.gq-cd-nome { font-weight: 700; font-size: 0.9rem; color: var(--text-primary); }
+.gq-cd-nums { display: flex; gap: 12px; font-size: 0.82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gq-cd-def { color: var(--deficit); }
+.gq-cd-trv { color: #64748b; }
+.gq-vazio { font-size: 0.82rem; color: var(--text-tertiary); padding: 0.3rem 0.55rem; }
+
+/* Drill-down do gargalo: dois blocos, navegáveis por ABAS clicáveis (compra / excesso).
+   Só um bloco aparece por vez — não precisa rolar até o fim pra ver o outro. */
+.gq-tabs { display: flex; gap: 8px; margin-top: 0.7rem; flex-wrap: wrap; }
+.gq-tab {
+    flex: 1 1 0; min-width: 140px; cursor: pointer; text-align: left;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--bg-card); padding: 0.5rem 0.85rem;
+    font-size: 0.85rem; color: var(--text-secondary);
+    font-variant-numeric: tabular-nums; transition: background 0.12s ease, border-color 0.12s ease;
+}
+.gq-tab strong { font-size: 1.1rem; font-weight: 800; }
+.gq-tab-ico { font-weight: 700; }
+.gq-tab-def .gq-tab-ico { color: var(--deficit); }
+.gq-tab-trv .gq-tab-ico { color: #64748b; }
+.gq-tab-rs { display: block; color: var(--text-tertiary); font-size: 0.8rem; margin-top: 1px; }
+.gq-tab:hover { background: var(--bg-subtle); }
+.gq-tab-def.active { border-color: var(--deficit); background: #fef2f2; color: var(--deficit); box-shadow: inset 0 -2px 0 var(--deficit); }
+.gq-tab-trv.active { border-color: #64748b; background: var(--bg-subtle); color: #475569; box-shadow: inset 0 -2px 0 #64748b; }
+.gq-tab.active .gq-tab-rs { color: inherit; opacity: 0.85; }
+
+.gq-sec { padding: 0.2rem 1.5rem 1.2rem; }
+.gq-sec-hidden { display: none; }
+.gq-sec-compra { box-shadow: inset 4px 0 0 var(--deficit); }
+.gq-sec-excesso { box-shadow: inset 4px 0 0 #94a3b8; }
+.gq-sec-hint { font-size: 0.78rem; color: var(--text-tertiary); padding: 0.85rem 0 0.55rem; }
+.gq-sec-vazio { font-size: 0.85rem; color: var(--text-tertiary); padding: 0.3rem 0 0.5rem; }
+.gq-un-neutro { color: var(--text-secondary) !important; font-weight: 600 !important; }
+.gq-sec-table { margin-top: 0.1rem; }
+
+@media (max-width: 720px) {
+    .cockpit-curva-cards { grid-template-columns: 1fr; }
+    .gq-matriz { grid-template-columns: 1fr; grid-template-areas: "gargalo" "destravar" "comprar" "equilibrado"; }
+    .gq-cd-nums { flex-direction: column; gap: 1px; text-align: right; }
+}
+
+/* Aviso quando a base anterior foi salva em outra meta (transição de prazo) */
+.cockpit-hero-delta.delta-incompat { background: #fff7ed; border: 1px solid #fed7aa; border-radius: var(--radius-sm); padding: 0.4rem 0.7rem; }
+.cockpit-hero-delta.delta-incompat .cockpit-hero-delta-base { color: #c2410c; font-weight: 600; margin-left: 0; }
+
+/* ============================================ */
+/* CURVA: card clicável + modal de produtos      */
+/* ============================================ */
+.cockpit-curva-card.is-link {
+    cursor: pointer;
+    transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.cockpit-curva-card.is-link:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.cockpit-curva-card.is-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.cockpit-curva-cta { margin-top: 0.5rem; font-size: 0.72rem; font-weight: 700; color: var(--primary); letter-spacing: 0.01em; }
+
+.cv-modal-backdrop {
+    position: fixed; inset: 0; z-index: 3000;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 5vh 1rem 3vh; overflow-y: auto;
+    animation: cvFade 0.16s ease;
+}
+@keyframes cvFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cvRise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.cv-modal {
+    width: 100%; max-width: 940px; max-height: 90vh;
+    background: var(--bg-card); border-radius: var(--radius);
+    box-shadow: var(--shadow-lg); display: flex; flex-direction: column;
+    overflow: hidden; animation: cvRise 0.18s ease;
+}
+.cv-modal-head { padding: 1.25rem 1.5rem 1rem; border-bottom: 1px solid var(--border); }
+.cv-modal-head-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.cv-modal-eyebrow { font-size: 0.74rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+.cv-modal-tot { font-size: 1.7rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.15; margin-top: 2px; }
+.cv-modal-sub { margin-top: 0.5rem; font-size: 0.82rem; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.cv-modal-x {
+    flex-shrink: 0; width: 34px; height: 34px; border: 1px solid var(--border-strong);
+    background: var(--bg-card); border-radius: 9px; cursor: pointer;
+    font-size: 1.3rem; line-height: 1; color: var(--text-secondary);
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.16s ease;
+}
+.cv-modal-x:hover { background: var(--bg-subtle); color: var(--text-primary); border-color: var(--text-tertiary); }
+
+.cv-modal-body { overflow-y: auto; }
+.cv-modal-table { width: 100%; border-collapse: collapse; }
+.cv-modal-table thead th {
+    position: sticky; top: 0; z-index: 1; background: var(--bg-subtle);
+    text-align: left; font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.03em;
+    padding: 0.7rem 1.5rem; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.cv-modal-table th.cvm-num { text-align: right; }
+.cv-modal-table tbody td {
+    padding: 0.65rem 1.5rem; font-size: 0.88rem;
+    border-bottom: 1px solid var(--border-soft); font-variant-numeric: tabular-nums;
+}
+.cv-modal-table tbody tr:last-child td { border-bottom: none; }
+.cv-modal-table tbody tr:hover { background: var(--bg-subtle); }
+.cv-modal-table td.cvm-un, .cv-modal-table td.cvm-rs, .cv-modal-table td.cvm-cob { text-align: right; }
+.cvm-rank { color: var(--text-tertiary); font-weight: 600; width: 38px; }
+.cvm-prod { color: var(--text-primary); font-weight: 600; }
+.cvm-un { font-weight: 700; color: var(--primary); white-space: nowrap; }
+.cvm-rs { font-weight: 800; color: var(--text-primary); white-space: nowrap; }
+.cvm-cob { white-space: nowrap; color: var(--text-secondary); }
+.cvm-cob-def { color: var(--deficit); font-weight: 700; }
+.cvm-cob-exc { color: var(--excesso); }
+.cvm-cob-ok { color: var(--saudavel); }
+.cvm-cd { color: var(--text-tertiary); font-size: 0.82rem; white-space: nowrap; }
+.cvm-cd strong { color: var(--deficit); font-weight: 700; }
+
+/* Drill-down: CDs em déficit por produto (linhas na mesma tabela, alinhadas às colunas) */
+.cvm-row.cvm-expandable { cursor: pointer; }
+.cvm-caret {
+    display: inline-block; margin-right: 6px; color: var(--text-tertiary);
+    font-size: 0.7rem; transition: transform 0.15s ease;
+}
+.cvm-row.cvm-expandable.open { background: var(--bg-subtle); }
+.cvm-row.cvm-expandable.open .cvm-caret { transform: rotate(90deg); color: var(--primary); }
+
+.cvm-sub { display: none; }
+.cvm-sub.open { display: table-row; }
+.cvm-sub > td { background: var(--bg-subtle); border-bottom: 1px solid var(--border-soft) !important; }
+.cvm-sub > td:first-child { box-shadow: inset 3px 0 0 var(--reposicao); }
+
+.cvm-sub-head > td { padding-top: 0.6rem !important; padding-bottom: 0.45rem !important; }
+.cvm-sub-label {
+    font-size: 0.72rem; font-weight: 700; color: var(--deficit);
+    text-transform: uppercase; letter-spacing: 0.03em;
+}
+.cvm-sub-hint {
+    margin-left: 8px; font-size: 0.72rem; font-weight: 500; color: var(--text-tertiary);
+    text-transform: none; letter-spacing: 0;
+}
+
+.cvm-sub-cd > td { padding-top: 0.4rem !important; padding-bottom: 0.4rem !important; font-size: 0.84rem; }
+.cvm-sub-cd-name { padding-left: 2.4rem !important; font-weight: 700; color: var(--text-primary); }
+.cvm-sub-un { color: var(--text-secondary) !important; font-weight: 600 !important; }
+.cvm-sub-rs { color: var(--text-secondary) !important; font-weight: 700 !important; }
+.cvm-cd-tag {
+    display: inline-block; font-size: 0.7rem; font-weight: 600;
+    color: var(--reposicao); background: rgba(8,145,178,0.1); padding: 1px 7px; border-radius: 6px;
+}
+
+.cvm-sub-foot > td {
+    padding-top: 0.45rem !important; padding-bottom: 0.7rem !important;
+    font-size: 0.76rem; color: var(--text-tertiary);
+}
+
+.cv-modal-vazio { padding: 2.5rem 1.5rem; text-align: center; color: var(--text-tertiary); font-size: 0.9rem; }
+.cv-modal-foot {
+    padding: 0.85rem 1.5rem; border-top: 1px solid var(--border);
+    font-size: 0.74rem; color: var(--text-tertiary); line-height: 1.5; background: var(--bg-subtle);
+}
+
+@media (max-width: 768px) {
+    .cv-modal-table thead th, .cv-modal-table tbody td { padding-left: 1rem; padding-right: 1rem; }
+    .cv-modal-table th:nth-child(6), .cv-modal-table td.cvm-cd { display: none; }
 }
