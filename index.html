@@ -23,6 +23,12 @@
                     <span id="fileName">Selecionar Planilha Excel</span>
                 </label>
                 <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
+                <label for="faltasInput" class="file-label file-label-faltas" title="Lista de produtos em falta na Supera (casada por EAN). Esses itens recebem o status 'Em falta' e saem da sugestão de compra.">
+                    <span class="file-icon">🚫</span>
+                    <span id="faltasName">Planilha de Faltas (EAN)</span>
+                </label>
+                <input type="file" id="faltasInput" accept=".xlsx,.xls" hidden>
+                <button id="faltasClearBtn" class="btn-secondary" style="display:none;" title="Remover a lista de faltas">✕ Faltas</button>
                 <button id="exportBtn" class="btn-secondary" style="display:none;">⬇ Exportar Excel</button>
                 <button id="clearBtn" class="btn-secondary" style="display:none;">Limpar Dados</button>
             </div>

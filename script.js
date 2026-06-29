@@ -146,11 +146,22 @@ let originalProducts = [];   // base completa (por CD+Material)
 let skuProducts = [];        // base agregada por SKU (Brasil)
 let currentView = 'cd';      // 'cd' = produto+CD | 'sku' = SKU Brasil
 
+// FALTAS DA SUPERA: lista de produtos em falta (chave = EAN). Quando um produto está
+// nessa lista, ele recebe o status "falta" (sobrepõe o cálculo) e a recompra zera, já
+// que a Supera não tem o item para entregar. Persiste em localStorage e é reaplicada à
+// base carregada. A falta é GLOBAL (vale para todos os CDs) — a planilha não tem coluna CD.
+let FALTAS = new Map();   // ean(normalizado) -> { descricao, codigo, dataPrevista, validadeCurta }
+const LS_FALTAS = 'sc_faltas';
+// Normaliza EAN para casamento: só dígitos (remove espaços, pontos, separadores).
+function normEAN(e) { return String(e == null ? '' : e).replace(/\D/g, ''); }
+
 // DOM ELEMENTS
 const fileInput = document.getElementById('fileInput');
 const fileName = document.getElementById('fileName');
 const clearBtn = document.getElementById('clearBtn');
 const exportBtn = document.getElementById('exportBtn');
+const faltasInput = document.getElementById('faltasInput');
+const faltasClearBtn = document.getElementById('faltasClearBtn');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabContents = document.querySelectorAll('.tab-content');
 
@@ -172,6 +183,8 @@ let ritmoScExplicito = false;   // true = SC escolhido de propósito; aí a vis�
 // EVENT LISTENERS
 fileInput.addEventListener('change', handleFileUpload);
 clearBtn.addEventListener('click', clearDashboard);
+if (faltasInput) faltasInput.addEventListener('change', handleFaltasUpload);
+if (faltasClearBtn) faltasClearBtn.addEventListener('click', limparFaltas);
 tabButtons.forEach(btn => btn.addEventListener('click', handleTabClick));
 
 productSearch.addEventListener('input', applyFilters);
@@ -195,7 +208,8 @@ const MS_STATUS_LABEL = {
     excesso: 'Atenção (60-100 dias)',
     'sem-giro': 'Problema (> 100 dias)',
     'sem-sinal': 'Sem sinal de venda',
-    'parado': 'Parado (sem giro recente)'
+    'parado': 'Parado (sem giro recente)',
+    'falta': 'Em falta na Supera'
 };
 // Várias chaves apontam para o MESMO conjunto global (ex.: cd, prodCd e recCd = filtroCD).
 const MS_FILTROS = {
@@ -308,7 +322,8 @@ function setupFiltrosMulti() {
         { value: 'saudavel', label: MS_STATUS_LABEL.saudavel },
         { value: 'reposicao', label: MS_STATUS_LABEL.reposicao },
         { value: 'excesso', label: MS_STATUS_LABEL.excesso },
-        { value: 'sem-giro', label: MS_STATUS_LABEL['sem-giro'] }
+        { value: 'sem-giro', label: MS_STATUS_LABEL['sem-giro'] },
+        { value: 'falta', label: MS_STATUS_LABEL.falta }
     ]);
 }
 setupFiltrosMulti();
@@ -561,6 +576,125 @@ async function handleFileUpload(event) {
     }
 }
 
+// ── PLANILHA DE FALTAS DA SUPERA ──────────────────────────────────────────────
+// Lê a aba "Produtos em Falta" e monta o mapa EAN -> info. O cabeçalho NÃO está na
+// primeira linha (há uma linha de datas solta acima), então localizamos a linha que
+// contém a coluna "EAN" e lemos a partir dela por posição de coluna.
+function parseFaltas(workbook) {
+    const sheetName = workbook.SheetNames.find(n => /falta/i.test(n)) || workbook.SheetNames[0];
+    const ws = workbook.Sheets[sheetName];
+    if (!ws) throw new Error('Planilha de faltas vazia.');
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
+    let hdr = -1, cEan = -1, cDesc = -1, cProd = -1, cData = -1, cVal = -1;
+    for (let i = 0; i < rows.length; i++) {
+        const r = (rows[i] || []).map(c => String(c == null ? '' : c).trim().toLowerCase());
+        const j = r.indexOf('ean');
+        if (j >= 0) {
+            hdr = i; cEan = j;
+            cDesc = r.findIndex(c => c.indexOf('descri') === 0);
+            cProd = r.indexOf('produto');
+            cData = r.findIndex(c => c.indexOf('prevista') >= 0);
+            cVal = r.findIndex(c => c.indexOf('validade') >= 0);
+            break;
+        }
+    }
+    if (hdr < 0) throw new Error('Coluna "EAN" não encontrada na planilha de faltas. Verifique o cabeçalho.');
+    const map = new Map();
+    for (let i = hdr + 1; i < rows.length; i++) {
+        const r = rows[i] || [];
+        const ean = normEAN(r[cEan]);
+        if (!ean) continue;
+        map.set(ean, {
+            descricao: cDesc >= 0 ? String(r[cDesc] || '').trim() : '',
+            codigo: cProd >= 0 ? String(r[cProd] || '').trim() : '',
+            dataPrevista: cData >= 0 ? fmtDataFalta(r[cData]) : '',
+            validadeCurta: cVal >= 0 ? /sim/i.test(String(r[cVal] || '')) : false
+        });
+    }
+    return map;
+}
+
+// Formata a "data prevista em estoque" (Date do SheetJS, serial Excel ou string) em DD/MM/AAAA.
+function fmtDataFalta(v) {
+    if (v == null || v === '') return '';
+    if (v instanceof Date && !isNaN(v)) {
+        return String(v.getDate()).padStart(2, '0') + '/' + String(v.getMonth() + 1).padStart(2, '0') + '/' + v.getFullYear();
+    }
+    const s = String(v).trim();
+    if (/^\d{5}$/.test(s)) {   // serial Excel puro (ex.: 46199)
+        const d = new Date(Date.UTC(1899, 11, 30) + Number(s) * 86400000);
+        return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + d.getUTCFullYear();
+    }
+    return s;
+}
+
+// Persiste a lista de faltas (pequena) em localStorage para sobreviver ao reload.
+function salvarFaltas() {
+    try {
+        const obj = {};
+        FALTAS.forEach((v, k) => { obj[k] = v; });
+        localStorage.setItem(LS_FALTAS, JSON.stringify(obj));
+    } catch (e) { console.warn('Não foi possível salvar as faltas:', e); }
+}
+
+function restaurarFaltas() {
+    try {
+        const raw = localStorage.getItem(LS_FALTAS);
+        if (!raw) return;
+        FALTAS = new Map(Object.entries(JSON.parse(raw)));
+    } catch (e) { console.warn('Não foi possível restaurar as faltas:', e); FALTAS = new Map(); }
+}
+
+// Reaplica a lista de faltas à base já carregada: recalcula status/recompra e redesenha.
+// finalizarProduto e agregarPorSKU leem de campos crus (vendas/estoque), então rodar de
+// novo é idempotente — só atualiza os derivados (status, dias) e a marca de falta.
+function aplicarFaltas() {
+    atualizarRotuloFaltas();
+    if (!dashboardData || !originalProducts.length) return;
+    const dc = dashboardData.diasCorridos;
+    originalProducts.forEach(finalizarProduto);
+    skuProducts = agregarPorSKU(originalProducts, dc);
+    allProducts = originalProducts.slice();
+    populateFilters();
+    updateAllVisualizations();
+    sincronizarHistorico();
+}
+
+async function handleFaltasUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (typeof XLSX === 'undefined') { alert('A biblioteca de leitura ainda não carregou. Recarregue a página.'); return; }
+    try {
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', cellDates: true });
+        FALTAS = parseFaltas(workbook);
+        salvarFaltas();
+        aplicarFaltas();
+        console.log('Faltas carregadas:', FALTAS.size, 'EANs');
+    } catch (error) {
+        console.error('Erro ao processar faltas:', error);
+        alert('Erro ao processar a planilha de faltas:\n' + error.message);
+    } finally {
+        if (faltasInput) faltasInput.value = '';
+    }
+}
+
+function limparFaltas() {
+    FALTAS = new Map();
+    try { localStorage.removeItem(LS_FALTAS); } catch (e) {}
+    aplicarFaltas();
+}
+
+// Atualiza o rótulo do seletor de faltas (mostra a contagem) e a visibilidade do "limpar".
+function atualizarRotuloFaltas() {
+    const lbl = document.getElementById('faltasName');
+    if (lbl) lbl.textContent = FALTAS.size
+        ? (FALTAS.size + ' em falta')
+        : 'Planilha de Faltas (EAN)';
+    const clr = document.getElementById('faltasClearBtn');
+    if (clr) clr.style.display = FALTAS.size ? 'inline-block' : 'none';
+}
+
 function processWorkbook(workbook, nomeArquivo) {
     // Data de referência vem do nome do arquivo: dia = corte do mês vigente,
     // mês = mês vigente (parcial). A janela de análise é esse mês + os 4 anteriores.
@@ -712,6 +846,13 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
 }
 
 function finalizarProduto(p) {
+    // FALTA NA SUPERA: casa pelo EAN. Marca antes de qualquer cálculo de status/compra,
+    // porque a memória de compra (chamada logo abaixo na reconciliação de reposição) já
+    // precisa enxergar a falta para zerar a recompra.
+    const _faltaInfo = FALTAS.size ? FALTAS.get(normEAN(p.ean)) : null;
+    p.emFalta = !!_faltaInfo;
+    p.faltaInfo = _faltaInfo || null;
+
     // DIAS DE ESTOQUE LIVRE: usa o valor JÁ calculado pela planilha na coluna AM
     // ("DIAS DE ESTOQUE LIVRE UNDS") da linha Regular — é a coluna oficial e vale para
     // todas as curvas (A, B e C). Só recalcula (Estoque Livre Regular ÷ Venda Média
@@ -761,6 +902,11 @@ function finalizarProduto(p) {
             p.status = 'reposicao';
         }
     }
+
+    // FALTA NA SUPERA sobrepõe QUALQUER status calculado (déficit, parado, reposição, etc.).
+    // Não adianta sinalizar compra de algo que a Supera não tem; a recompra já zera em
+    // memoriaCompra. Quando o produto sair da lista de faltas, volta sozinho ao fluxo normal.
+    if (p.emFalta) p.status = 'falta';
 }
 
 // Agrega os pontos (que estão por CD+SKU) num único registro por SKU,
@@ -923,7 +1069,7 @@ function consolidate(products, nomeArquivo, diasCorridos) {
                 estoqueLivreTotal: 0,
                 estoqueLivreRSTotal: 0,
                 vendaMediaTotal: 0,
-                deficit: 0, saudavel: 0, reposicao: 0, excesso: 0, semGiro: 0, semSinal: 0, parado: 0
+                deficit: 0, saudavel: 0, reposicao: 0, excesso: 0, semGiro: 0, semSinal: 0, parado: 0, falta: 0
             };
         }
         const c = cdMap[p.cd];
@@ -938,6 +1084,7 @@ function consolidate(products, nomeArquivo, diasCorridos) {
         else if (p.status === 'sem-giro') c.semGiro++;
         else if (p.status === 'sem-sinal') c.semSinal++;
         else if (p.status === 'parado') c.parado++;
+        else if (p.status === 'falta') c.falta++;
     });
 
     // Dias médios PONDERADOS: estoque livre total / venda média total * 30
@@ -1096,7 +1243,7 @@ function updateActiveFilters() {
     if (!bar) return;
 
     const chips = [];
-    const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Saudável (45-60 dias)', reposicao: 'Em reposição (a caminho)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)', 'sem-sinal': 'Sem sinal de venda', 'parado': 'Parado (sem giro recente)' };
+    const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Saudável (45-60 dias)', reposicao: 'Em reposição (a caminho)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)', 'sem-sinal': 'Sem sinal de venda', 'parado': 'Parado (sem giro recente)', 'falta': 'Em falta na Supera' };
 
     filtroCD.forEach(v => chips.push({ k: 'cd', v, txt: 'CD: ' + v }));
     filtroCurva.forEach(v => chips.push({ k: 'curva', v, txt: 'Curva ' + v }));
@@ -1495,6 +1642,18 @@ function thOrdRec(key, label, align) {
 // O que está a caminho (trânsito + entrega) já entra porque está dentro do Estoque Total.
 function memoriaCompra(p, metaOverride) {
     const diasMeta = (typeof metaOverride === 'number' && metaOverride > 0) ? metaOverride : getMetaDias(p);
+    // FALTA NA SUPERA: não há o que comprar (a Supera não tem para entregar). Zera a recompra
+    // em TODA parte que usa esta função: Sugestões, KPI de recompra represada e Ritmo. Mantém
+    // aCaminho (o que já vem) só para exibição, sem inventar critério novo.
+    if (p && p.emFalta) {
+        const aCaminho = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
+        return {
+            necessario: 0, comprar: 0, comprarBruto: 0, diasMeta, pisoMinimo: false, semGiroRecente: false,
+            multiplo: 0, caixas: 0, temMultiplo: false,
+            mediaMesesCheios: 0, giroDia: 0, mesesCobertura: diasMeta / 30, aCaminho,
+            projMes: 0, restoMes: 0, estoqueProjFim: 0, disponivelFuturo: 0, diasFuturo: 0
+        };
+    }
     const mesesCobertura = diasMeta / 30;
     // Alvo de cobertura, em unidades: venda média ponderada × (dias meta ÷ 30). Sem
     // arredondar aqui — o ajuste ao múltiplo de caixa vem no fim, igual ao mapa.
@@ -1557,6 +1716,20 @@ function vendasPorMesHtml(p) {
 
 // Texto da memória de cálculo da sugestão
 function explicacaoCompra(p) {
+    // Produto em falta na Supera: explicação curta no lugar do detalhamento (que estaria
+    // todo zerado). Mostra a previsão de retorno e se é de validade curta, quando houver.
+    if (p && p.emFalta) {
+        const fi = p.faltaInfo || {};
+        const prev = fi.dataPrevista ? ` Previsão de retorno ao estoque: <strong>${escapeHtml(fi.dataPrevista)}</strong>.` : '';
+        const val = fi.validadeCurta ? ` <span style="color:var(--excesso);">Atenção: validade curta.</span>` : '';
+        return `
+        <div class="rec-memoria">
+            <div class="rec-memoria-calc">
+                <span class="rec-memoria-label">Em falta na Supera:</span>
+                Produto consta na lista de faltas da Supera (casado por EAN), então <strong>não há o que comprar</strong> — a Supera não tem o item para entregar. A sugestão fica em <strong>0 un</strong> e ele sai da recompra represada até voltar.${prev}${val}
+            </div>
+        </div>`;
+    }
     const { necessario, comprar, comprarBruto, multiplo, caixas, temMultiplo, mediaMesesCheios, giroDia, mesesCobertura, aCaminho, projMes, restoMes, estoqueProjFim, diasFuturo, diasMeta, pisoMinimo, semGiroRecente } = memoriaCompra(p);
     const mesesTxt = Number.isInteger(mesesCobertura) ? `${mesesCobertura} meses` : `${mesesCobertura.toFixed(1)} meses`;
     const r = n => Math.round(n).toLocaleString('pt-BR');
@@ -1603,16 +1776,25 @@ function explicacaoCompra(p) {
         </div>`;
 }
 
+// Sublinha da célula COMPRAR: caixas de embarque, "sem múltiplo" (produto sem caixa de
+// embarque cadastrada) ou "em falta" (produto em falta na Supera — a compra está zerada
+// por isso, não por múltiplo). A falta tem prioridade na exibição.
+function caixasSublabel(p, memo) {
+    if (p && p.emFalta) return `<div style="font-size:0.7rem;color:#1e293b;font-weight:700;">em falta</div>`;
+    if (memo.temMultiplo && memo.caixas > 0)
+        return `<div style="font-size:0.72rem;color:var(--text-secondary);">${memo.caixas} cx × ${memo.multiplo}</div>`;
+    return memo.temMultiplo ? '' : `<div style="font-size:0.7rem;color:var(--excesso);">sem múltiplo</div>`;
+}
+
 function renderRecTable(lista, filter, hideCD) {
     const isExcesso = filter === 'performance';
     const baseCols = hideCD ? 8 : 9;
     const colspan = isExcesso ? baseCols : baseCols + 1; // +1 da coluna Meta (oculta em excesso)
     const rows = lista.map((p, idx) => {
         const dias = Math.round(p.diasLivre);
-        const { comprar, aCaminho, caixas, multiplo, temMultiplo } = memoriaCompra(p);
-        const caixasTxt = (temMultiplo && caixas > 0)
-            ? `<div style="font-size:0.72rem;color:var(--text-secondary);">${caixas} ${caixas === 1 ? 'cx' : 'cx'} × ${multiplo}</div>`
-            : (temMultiplo ? '' : `<div style="font-size:0.7rem;color:var(--excesso);">sem múltiplo</div>`);
+        const memo = memoriaCompra(p);
+        const { comprar, aCaminho } = memo;
+        const caixasTxt = caixasSublabel(p, memo);
         const acaoCol = isExcesso
             ? `<span style="color:var(--excesso);font-weight:600;">${fmtUn(p.estoqueLivre)} un</span>`
             : `<strong style="color:var(--primary);">${comprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}`;
@@ -1672,9 +1854,7 @@ function onRecMetaChange(idx, valor) {
     const inp = document.querySelector(`.row-meta-input[data-rec-idx="${idx}"]`);
     if (inp) inp.value = v;
     const memo = memoriaCompra(p);
-    const caixasTxt = (memo.temMultiplo && memo.caixas > 0)
-        ? `<div style="font-size:0.72rem;color:var(--text-secondary);">${memo.caixas} cx × ${memo.multiplo}</div>`
-        : (memo.temMultiplo ? '' : `<div style="font-size:0.7rem;color:var(--excesso);">sem múltiplo</div>`);
+    const caixasTxt = caixasSublabel(p, memo);
     const sugCell = document.getElementById('recsug-' + idx);
     if (sugCell) sugCell.innerHTML = `<strong style="color:var(--primary);">${memo.comprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}`;
     // Se a memória de cálculo dessa linha estiver aberta, atualiza-a também
@@ -2355,9 +2535,7 @@ function renderDetailList(pontos) {
     const rows = pontos.map((p, idx) => {
         const memo = memoriaCompra(p);
         const dias = Math.round(p.diasLivre);
-        const caixasTxt = (memo.temMultiplo && memo.caixas > 0)
-            ? `<div style="font-size:0.72rem;color:var(--text-secondary);">${memo.caixas} cx × ${memo.multiplo}</div>`
-            : (memo.temMultiplo ? '' : `<div style="font-size:0.7rem;color:var(--excesso);">sem múltiplo</div>`);
+        const caixasTxt = caixasSublabel(p, memo);
         const sugCol = p.semGiro
             ? '<span style="color:#94a3b8;">—</span>'
             : `<strong style="color:var(--primary);">${memo.comprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}`;
@@ -2426,9 +2604,7 @@ function onDetMetaChange(idx, valor) {
     const inp = document.querySelector(`.row-meta-input[data-det-idx="${idx}"]`);
     if (inp) inp.value = v;
     const memo = memoriaCompra(p);
-    const caixasTxt = (memo.temMultiplo && memo.caixas > 0)
-        ? `<div style="font-size:0.72rem;color:var(--text-secondary);">${memo.caixas} cx × ${memo.multiplo}</div>`
-        : (memo.temMultiplo ? '' : `<div style="font-size:0.7rem;color:var(--excesso);">sem múltiplo</div>`);
+    const caixasTxt = caixasSublabel(p, memo);
     const sugCell = document.getElementById('detsug-' + idx);
     if (sugCell) sugCell.innerHTML = `<strong style="color:var(--primary);">${memo.comprar.toLocaleString('pt-BR')} un</strong>${caixasTxt}`;
     // Se o bloco completo dessa linha estiver aberto, atualiza-o também
@@ -3346,7 +3522,7 @@ function updateCockpit() {
             </div>
         </div>
 
-        <div class="cockpit-foot">Base ${escapeHtml(dashboardData.dataReferencia)} · ${a.cont.deficit + a.cont.saudavel + a.cont.reposicao + a.cont.excesso + a.cont['sem-giro'] + (a.cont['sem-sinal'] || 0) + (a.cont['parado'] || 0)} itens classificados. A recompra represada usa a mesma conta da aba Sugestões de Compra.</div>
+        <div class="cockpit-foot">Base ${escapeHtml(dashboardData.dataReferencia)} · ${a.cont.deficit + a.cont.saudavel + a.cont.reposicao + a.cont.excesso + a.cont['sem-giro'] + (a.cont['sem-sinal'] || 0) + (a.cont['parado'] || 0) + (a.cont['falta'] || 0)} itens classificados. A recompra represada usa a mesma conta da aba Sugestões de Compra.</div>
     `;
 
     // Navegação dos cards
@@ -3675,7 +3851,7 @@ function updateMudancas() {
 
     const STBADGE = {
         deficit: ['Déficit', 'st-deficit'], saudavel: ['45–60d', 'st-saud'], reposicao: ['Reposição', 'st-repo'],
-        excesso: ['Atenção', 'st-exc'], 'sem-giro': ['Encalhado', 'st-enc'], 'sem-sinal': ['Sem sinal', 'st-sinal'], 'parado': ['Parado', 'st-parado']
+        excesso: ['Atenção', 'st-exc'], 'sem-giro': ['Encalhado', 'st-enc'], 'sem-sinal': ['Sem sinal', 'st-sinal'], 'parado': ['Parado', 'st-parado'], 'falta': ['Em falta', 'st-falta']
     };
     const badge = st => { const b = STBADGE[st] || [st, '']; return `<span class="mud-badge ${b[1]}">${b[0]}</span>`; };
 
@@ -3821,13 +3997,13 @@ function escapeHtml(str) {
 }
 
 function formatStatus(status) {
-    return { deficit: 'Compra', saudavel: 'Saudável', reposicao: 'Em reposição', excesso: 'Atenção', 'sem-giro': 'Problema', 'sem-sinal': 'Sem sinal', 'parado': 'Parado' }[status] || status;
+    return { deficit: 'Compra', saudavel: 'Saudável', reposicao: 'Em reposição', excesso: 'Atenção', 'sem-giro': 'Problema', 'sem-sinal': 'Sem sinal', 'parado': 'Parado', 'falta': 'Em falta' }[status] || status;
 }
 
 // Classe de cor pela faixa EXIBIDA. Déficit (< 45) = azul "Compra"; saudável (45-60) =
 // verde (acima da meta de 45d); reposição = ciano; atenção/problema laranja/vermelho.
 function statusGrupo(status) {
-    return { deficit: 'compra', saudavel: 'saudavel', reposicao: 'reposicao', excesso: 'atencao', 'sem-giro': 'problema', 'sem-sinal': 'sem-sinal', 'parado': 'parado' }[status] || status;
+    return { deficit: 'compra', saudavel: 'saudavel', reposicao: 'reposicao', excesso: 'atencao', 'sem-giro': 'problema', 'sem-sinal': 'sem-sinal', 'parado': 'parado', 'falta': 'falta' }[status] || status;
 }
 
 // ============================================
@@ -3998,6 +4174,10 @@ console.log('Dashboard pronto. SheetJS:', typeof XLSX !== 'undefined' ? 'carrega
 
 // Ao abrir o link, recarrega a última planilha salva (se houver). Some apenas em "Limpar Dados".
 (async function restaurarPlanilha() {
+    // Restaura a lista de faltas ANTES da planilha, para que finalizarProduto já marque a
+    // falta durante o reprocessamento da base. A lista persiste independente da planilha.
+    restaurarFaltas();
+    atualizarRotuloFaltas();
     if (typeof XLSX === 'undefined') { console.warn('SheetJS indisponível; restauração ignorada.'); return; }
     try {
         const buffer = await idbCarregar();

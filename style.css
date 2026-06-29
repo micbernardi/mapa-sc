@@ -61,48 +61,48 @@ body {
 .header {
     background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #2563eb 100%);
     color: white;
-    padding: 1.1rem 2rem;
+    padding: 0.6rem 1.5rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 1.5rem;
+    gap: 1rem;
     border-bottom: 1px solid rgba(255,255,255,0.08);
     box-shadow: 0 1px 0 rgba(15,23,42,0.05);
     flex-wrap: wrap;
 }
 
 .header-content h1 {
-    font-size: 1.18rem;
-    margin-bottom: 0.15rem;
+    font-size: 1rem;
+    margin-bottom: 0.1rem;
     font-weight: 700;
     letter-spacing: -0.015em;
 }
 
 .header-content .subtitle {
     opacity: 0.82;
-    font-size: 0.82rem;
+    font-size: 0.74rem;
     font-weight: 400;
 }
 
 .upload-section {
     display: flex;
-    gap: 0.75rem;
+    gap: 0.45rem;
     align-items: center;
 }
 
 .file-label {
     background: rgba(255,255,255,0.12);
     border: 1px solid rgba(255,255,255,0.35);
-    padding: 0.55rem 1rem;
+    padding: 0.28rem 0.6rem;
     border-radius: var(--radius-sm);
     cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.35rem;
     transition: background 0.18s ease, border-color 0.18s ease;
     font-weight: 500;
     white-space: nowrap;
-    font-size: 0.88rem;
+    font-size: 0.72rem;
 }
 
 .file-label:hover {
@@ -111,19 +111,19 @@ body {
 }
 
 .file-icon {
-    font-size: 1rem;
+    font-size: 0.78rem;
 }
 
 .btn-secondary {
     background: white;
     color: var(--primary-dark);
     border: 1px solid transparent;
-    padding: 0.55rem 1rem;
+    padding: 0.28rem 0.6rem;
     border-radius: var(--radius-sm);
     cursor: pointer;
     font-weight: 600;
     transition: background 0.18s ease;
-    font-size: 0.88rem;
+    font-size: 0.72rem;
 }
 
 .btn-secondary:hover {
@@ -803,6 +803,14 @@ canvas {
 .status-badge.parado {
     background: rgba(124, 58, 237, 0.10);
     color: #6d28d9;
+}
+/* Em falta na Supera: bloqueio duro (não há o que comprar). Único badge de preenchimento
+   sólido (slate escuro + texto branco), distinto do parado (violeta), do problema (vermelho)
+   e do sem-giro (cinza). Sinaliza "indisponível na Supera, fora da sugestão". */
+.status-badge.falta {
+    background: #1e293b;
+    color: #fff;
+    font-weight: 700;
 }
 
 /* Linha de status nos cards de CD */
@@ -1945,6 +1953,7 @@ canvas {
 .st-enc { background: #fee2e2; color: #7f1d1d; }
 .st-sinal { background: #f1f5f9; color: #64748b; }
 .st-parado { background: #ede9fe; color: #6d28d9; }
+.st-falta { background: #1e293b; color: #fff; }
 
 .mud-cdmov { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.2rem 1.3rem; }
 .mud-cdmov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.6rem; margin-top: 0.8rem; }
