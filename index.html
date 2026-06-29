@@ -36,7 +36,6 @@
                 <button class="tab-btn" data-tab="products">📦 Produtos</button>
                 <button class="tab-btn" data-tab="recommendations" title="Quanto comprar para cada produto atingir 45 dias de cobertura de estoque, já descontando o que vem a caminho (meta padrão, ajustável por linha)">💡 Sugestões de Compra (45 dias)</button>
                 <button class="tab-btn" data-tab="ritmo" title="Entrada (estoque livre + reposição a caminho) versus saída (demanda que vocês geram). Diz se a demanda está acima, no ritmo ou abaixo do estoque.">⚖️ Ritmo Entrada × Saída</button>
-                <button class="tab-btn" data-tab="mapa-cd" title="Ranking dos CDs por recompra represada — onde a Supera mais fatura se a cobertura voltar ao alvo.">🗺️ Mapa por CD</button>
                 <button class="tab-btn" data-tab="gargalo" title="CDs onde déficit crítico (ruptura) e capital travado (>100d) convivem — onde agir nos dois sentidos ao mesmo tempo.">🚧 Gargalo por CD</button>
                 <button class="tab-btn" data-tab="details">🔍 Detalhes</button>
                 <button class="tab-btn" data-tab="cd-sales" title="Histórico de saída (vendas) mês a mês, somando todos os produtos">🏭 Vendas do CD</button>
@@ -104,7 +103,7 @@
                     </div>
                     <div class="kpi-card kpi-clickable" data-kpi="compra">
                         <div class="kpi-value" id="kpiCds">--</div>
-                        <div class="kpi-label" id="kpiCdsLabel">Necessidade de compra (&lt;60 dias)</div>
+                        <div class="kpi-label" id="kpiCdsLabel">Necessidade de compra (&lt;45 dias)</div>
                         <div class="kpi-cta">Ver sugestões de compra →</div>
                     </div>
                 </div>
@@ -190,7 +189,7 @@
                         <label>Focar em:</label>
                         <select id="recFilter" class="filter-select">
                             <option value="todos" selected>Todos os produtos</option>
-                            <option value="deficit">Necessidade de compra (&lt; 60 dias)</option>
+                            <option value="deficit">Necessidade de compra (meta 45 dias)</option>
                             <option value="urgent">Compra urgente (&lt; 30 dias)</option>
                             <option value="performance">Estoque parado (atenção + problema)</option>
                         </select>
@@ -245,25 +244,6 @@
                 <div class="ritmo-kpis" id="ritmoKpis"></div>
                 <div class="recommendations-container" id="ritmoContainer">
                     <div class="empty-state">Carregue uma planilha para analisar o ritmo entrada × saída</div>
-                </div>
-            </section>
-
-            <!-- TAB: MAPA POR CD -->
-            <section class="tab-content" id="mapa-cd">
-                <div class="filters-row">
-                    <div class="filter-group">
-                        <label>Ordenar CDs por:</label>
-                        <select id="mapaCdSort" class="filter-select">
-                            <option value="recompra">Maior recompra represada (R$)</option>
-                            <option value="problema">Mais capital travado (&gt; 100 dias)</option>
-                            <option value="atencao">Mais capital em atenção (60-100 dias)</option>
-                            <option value="cobertura">Menor cobertura média (dias)</option>
-                            <option value="nome">Nome do CD (A → Z)</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="mapaCdContent">
-                    <div class="empty-state">Carregue uma planilha para ver o ranking de CDs.</div>
                 </div>
             </section>
 

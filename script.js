@@ -186,13 +186,11 @@ if (ritmoViewSel) ritmoViewSel.addEventListener('change', () => {
 if (ritmoSort) ritmoSort.addEventListener('change', updateRitmo);
 const cdSalesSelectEl = document.getElementById('cdSalesSelect');
 if (cdSalesSelectEl) cdSalesSelectEl.addEventListener('change', renderVendasCDDetalhe);
-const mapaCdSortEl = document.getElementById('mapaCdSort');
-if (mapaCdSortEl) mapaCdSortEl.addEventListener('change', updateMapaCD);
 
 // --- Multi-seleção global (espelhada em várias abas) ---
 const MS_STATUS_LABEL = {
     deficit: 'Necessidade de compra (< 45 dias)',
-    saudavel: 'Necessidade de compra (45-60 dias)',
+    saudavel: 'Saudável (45-60 dias)',
     reposicao: 'Em reposição (coberto pelo que vem)',
     excesso: 'Atenção (60-100 dias)',
     'sem-giro': 'Problema (> 100 dias)',
@@ -220,7 +218,6 @@ function aplicarTudo() {
     renderVendasCD();        // Vendas do CD
     updateRitmo();           // Ritmo Entrada × Saída
     updateCockpit();         // Cockpit
-    updateMapaCD();          // Mapa por CD
     updateGargalo();         // Gargalo por CD
 }
 
@@ -1028,14 +1025,12 @@ function clearDashboard() {
     const af = document.getElementById('activeFilters');
     if (af) { af.style.display = 'none'; af.innerHTML = ''; }
 
-    // Telas novas: Cockpit, Mapa por CD, O que mudou
+    // Telas novas: Cockpit, O que mudou
     cmpAtual = null;
     cmpAnterior = null;
     snapApagarTudo();   // "Limpar Dados" zera também o histórico de comparação
     const ckp = document.getElementById('cockpitContent');
     if (ckp) ckp.innerHTML = '<div class="empty-state">Carregue uma planilha para abrir o cockpit.</div>';
-    const mcd = document.getElementById('mapaCdContent');
-    if (mcd) mcd.innerHTML = '<div class="empty-state">Carregue uma planilha para ver o ranking de CDs.</div>';
     const mud = document.getElementById('mudancasContent');
     if (mud) mud.innerHTML = '<div class="empty-state">Carregue uma planilha para comparar com a base anterior.</div>';
 }
@@ -1101,7 +1096,7 @@ function updateActiveFilters() {
     if (!bar) return;
 
     const chips = [];
-    const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Necessidade de compra (45-60)', reposicao: 'Em reposição (a caminho)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)', 'sem-sinal': 'Sem sinal de venda', 'parado': 'Parado (sem giro recente)' };
+    const statusLabels = { deficit: 'Necessidade de compra (<45 dias)', saudavel: 'Saudável (45-60 dias)', reposicao: 'Em reposição (a caminho)', excesso: 'Atenção (60-100 dias)', 'sem-giro': 'Problema (>100 dias)', 'sem-sinal': 'Sem sinal de venda', 'parado': 'Parado (sem giro recente)' };
 
     filtroCD.forEach(v => chips.push({ k: 'cd', v, txt: 'CD: ' + v }));
     filtroCurva.forEach(v => chips.push({ k: 'curva', v, txt: 'Curva ' + v }));
@@ -1151,7 +1146,6 @@ function updateAllVisualizations() {
     renderVendasCD();
     updateRitmo();
     updateCockpit();
-    updateMapaCD();
     updateGargalo();
 }
 
@@ -1172,14 +1166,14 @@ function updateKPIs() {
     const prods = (allProducts.length > 0 || isFilterActive()) ? allProducts : baseAtual();
 
     // Valores em R$ por faixa de DIAS DE ESTOQUE LIVRE (coluna AM), 100% pela AM:
-    //   necessidade de compra = < 60 dias (status deficit + saudavel + reposicao)
+    //   necessidade de compra = < 45 dias (a meta de cobertura; 45-60d já está saudável)
     //   atenção               = 60 a 100 dias (status excesso)
     //   problema              = > 100 dias (status sem-giro)
     const estTotal = prods.reduce((s, p) => s + p.estoqueLivreRS, 0);
-    // Faixa por COBERTURA LIVRE < 60 dias. Inclui "reposicao" (livre baixo, já coberto
-    // pelo que vem): a faixa mede capital por cobertura livre, então eles pertencem aqui.
-    // O que muda é o badge na lista — não há ordem de compra nova para eles.
-    const estCompra = prods.filter(p => p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao')
+    // Faixa por COBERTURA LIVRE < 45 dias (a meta). 45-60d fica de fora: está acima da
+    // meta, é saudável. Inclui "reposicao" com cobertura livre < 45 (livre baixo, já coberto
+    // pelo que vem): a faixa mede capital por cobertura livre, então pertence aqui.
+    const estCompra = prods.filter(p => (p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao') && p.diasLivre < DIAS_MIN_SAUDAVEL)
         .reduce((s, p) => s + p.estoqueLivreRS, 0);
     const estAtencao = prods.filter(p => p.status === 'excesso').reduce((s, p) => s + p.estoqueLivreRS, 0);
     const estProblema = prods.filter(p => p.status === 'sem-giro').reduce((s, p) => s + p.estoqueLivreRS, 0);
@@ -1194,9 +1188,9 @@ function updateKPIs() {
     document.getElementById('kpiSemGiro').textContent = formatBRLCheio(estProblema);
     document.getElementById('kpiSemGiroLabel').innerHTML = `Problema (&gt; 100 dias) &middot; ${pctProblema.toFixed(0)}% do capital`;
 
-    // 4o card: Necessidade de compra (< 60 dias de cobertura)
+    // 4o card: Necessidade de compra (< 45 dias de cobertura — a meta)
     document.getElementById('kpiCds').textContent = formatBRLCheio(estCompra);
-    document.getElementById('kpiCdsLabel').innerHTML = `Necessidade de compra (&lt; 60 dias) &middot; ${pctCompra.toFixed(0)}% do capital`;
+    document.getElementById('kpiCdsLabel').innerHTML = `Necessidade de compra (&lt; 45 dias) &middot; ${pctCompra.toFixed(0)}% do capital`;
 }
 
 function isFilterActive() {
@@ -1355,7 +1349,7 @@ function updateCDAnalysis() {
             </ul>
             <div class="cd-status-row">
                 <span class="status-badge deficit" title="Necessidade de compra (<45 dias)">${c.deficit} compra</span>
-                <span class="status-badge saudavel" title="Necessidade de compra (45-60 dias)">${c.saudavel} ok</span>
+                <span class="status-badge saudavel" title="Saudável (45-60 dias)">${c.saudavel} ok</span>
                 ${c.reposicao > 0 ? `<span class="status-badge reposicao" title="Em reposição: estoque livre baixo, mas já coberto pelo que está a caminho">${c.reposicao} reposição</span>` : ''}
                 <span class="status-badge excesso" title="Atenção (60-100 dias)">${c.excesso} atenção</span>
                 ${c.semGiro > 0 ? `<span class="status-badge sem-giro" title="Problema (>100 dias)">${c.semGiro} problema</span>` : ''}
@@ -1386,7 +1380,7 @@ function updateRecommendations() {
     let jaRepostos = 0;
 
     if (filter === 'deficit') {
-        intro = `Produtos abaixo de ${DIAS_MAX_SAUDAVEL} dias de cobertura que ainda precisam de compra.`;
+        intro = `Produtos que precisam de compra para sustentar a meta de ${metaDiasGlobal} dias de cobertura.`;
         // Inclui "reposicao" (déficit/saudável já coberto pelo que vem): assim eles
         // seguem entrando na conta de "já com reposição a caminho" (jaRepostos) e saem
         // da lista de compra pelo filtro comprar>0 logo abaixo — comportamento idêntico.
@@ -2854,7 +2848,7 @@ function blocoVendasCD(titulo, un, rs, destaque, prods) {
 // ============================================
 
 // ============================================
-// COCKPIT · MAPA POR CD · O QUE MUDOU
+// COCKPIT · O QUE MUDOU
 // Tese única: "recompra represada" = quanto de faturamento Supera está travado agora,
 // medido pela MESMA conta da aba Sugestões (memoriaCompra → un a comprar × PF).
 // ============================================
@@ -3400,104 +3394,6 @@ function deltaCard(mostrar, atual, anterior, subirEhRuim) {
 }
 
 // ============================================
-// MAPA POR CD
-// ============================================
-function updateMapaCD() {
-    const box = document.getElementById('mapaCdContent');
-    if (!box) return;
-    if (!dashboardData) { box.innerHTML = '<div class="empty-state">Carregue uma planilha para ver o ranking de CDs.</div>'; return; }
-
-    // O Mapa respeita só o filtro de Curva (global). Sempre mostra todos os CDs no ranking.
-    const prods = originalProducts.filter(p => !filtroCurva.size || filtroCurva.has(p.curva));
-    const porCD = {};
-    prods.forEach(p => {
-        const c = porCD[p.cd] || (porCD[p.cd] = { cd: p.cd, recompraRS: 0, un: 0, itens: 0, capTotal: 0, capProblema: 0, capAtencao: 0, estoqueLivre: 0, vendaMedia: 0, def: 0, enc: 0 });
-        c.capTotal += p.estoqueLivreRS; c.estoqueLivre += p.estoqueLivre; c.vendaMedia += p.vendaMedia;
-        if (p.status === 'excesso') c.capAtencao += p.estoqueLivreRS;
-        else if (p.status === 'sem-giro') { c.capProblema += p.estoqueLivreRS; c.enc++; }
-        if (p.status === 'deficit') c.def++;
-        const r = recompraDe(p);
-        if (r.un > 0) { c.recompraRS += r.rs; c.un += r.un; c.itens++; }
-    });
-    const lista = Object.values(porCD);
-    lista.forEach(c => { c.diasMedios = c.vendaMedia > 0 ? (c.estoqueLivre / c.vendaMedia) * 30 : 0; });
-
-    const sortKey = (document.getElementById('mapaCdSort') || {}).value || 'recompra';
-    // Cada ordenação define qual número aparece em destaque (valor + barra + topo),
-    // pra que o card mostre a métrica que você está rankeando, não sempre a represada.
-    const metricas = {
-        recompra:  { val: c => c.recompraRS,  lbl: 'recompra represada',            money: true,  asc: false, totLbl: 'Recompra represada' },
-        problema:  { val: c => c.capProblema, lbl: 'capital travado > 100 dias',     money: true,  asc: false, totLbl: 'Capital travado > 100 dias' },
-        atencao:   { val: c => c.capAtencao,  lbl: 'capital em atenção 60-100 dias', money: true,  asc: false, totLbl: 'Capital em atenção 60-100 dias' },
-        cobertura: { val: c => c.diasMedios,  lbl: 'menor cobertura média',          money: false, asc: true,  totLbl: 'Cobertura' },
-        nome:      { val: c => c.recompraRS,  lbl: 'recompra represada',            money: true,  asc: false, totLbl: 'Recompra represada' }
-    };
-    const M = metricas[sortKey] || metricas.recompra;
-
-    if (sortKey === 'nome') lista.sort((a, b) => a.cd.localeCompare(b.cd));
-    else lista.sort((a, b) => M.asc ? (M.val(a) - M.val(b)) : (M.val(b) - M.val(a)));
-
-    const totRecompra = lista.reduce((s, c) => s + c.recompraRS, 0);
-    const totMetric = lista.reduce((s, c) => s + (M.money ? M.val(c) : 0), 0);
-    const maxMetric = Math.max(1, ...lista.map(c => (M.money ? M.val(c) : 0)));
-    // Barra: R$ proporcional ao valor; cobertura, pior (menor) = mais cheia
-    const barraPct = c => M.money
-        ? (M.val(c) / maxMetric * 100)
-        : Math.max(3, Math.min(100, (120 - c.diasMedios) / 120 * 100));
-
-    // CD em destaque no topo (independe da ordem da lista no caso "nome")
-    const destaque = sortKey === 'nome'
-        ? lista.reduce((a, b) => (b.recompraRS > a.recompraRS ? b : a), lista[0] || null)
-        : (lista[0] || null);
-
-    // Snapshot anterior por CD (para o delta de recompra por CD)
-    const anteriorCD = (!filtroCurva.size && cmpAnterior && cmpAnterior.metaRef === META_REF_COMPARATIVO) ? cmpAnterior.porCD : null;
-
-    const linhas = lista.map((c, i) => {
-        let delta = '';
-        if (anteriorCD && anteriorCD[c.cd]) {
-            const d = c.recompraRS - anteriorCD[c.cd].recompraRS;
-            if (Math.abs(d) >= 1) delta = `<span class="mapa-delta ${classeDelta(d, true)}">${fmtSinalRS(d)}</span>`;
-        } else if (anteriorCD && !anteriorCD[c.cd]) {
-            delta = `<span class="mapa-delta delta-novo">novo</span>`;
-        }
-        const valTxt = M.money ? formatBRLCheio(M.val(c)) : `${c.diasMedios.toFixed(0)}d`;
-        return `
-            <div class="mapa-row">
-                <div class="mapa-rank">${i + 1}</div>
-                <div class="mapa-main">
-                    <div class="mapa-head">
-                        <span class="mapa-cd">${escapeHtml(c.cd)}</span>
-                        <span class="mapa-val">${valTxt} ${delta}</span>
-                    </div>
-                    <div class="mapa-bar-track"><div class="mapa-bar-fill" style="width:${barraPct(c).toFixed(1)}%"></div></div>
-                    <div class="mapa-meta">
-                        <span class="mapa-meta-tag">${M.lbl}</span>
-                        <span>${c.itens} itens · ${c.un.toLocaleString('pt-BR')} un</span>
-                        <span class="mapa-meta-cap">represada: <strong>${formatBRLCheio(c.recompraRS)}</strong></span>
-                        <span class="mapa-meta-cap">atenção 60-100d: <strong class="excesso">${formatBRLCheio(c.capAtencao)}</strong></span>
-                        <span class="mapa-meta-cap">travado &gt;100d: <strong class="sem-giro">${formatBRLCheio(c.capProblema)}</strong></span>
-                        <span class="mapa-meta-cap">cobertura: <strong>${c.diasMedios.toFixed(0)}d</strong></span>
-                    </div>
-                </div>
-            </div>`;
-    }).join('');
-
-    const heroEsq = M.money
-        ? `<div class="mapa-resumo-val">${formatBRLCheio(totMetric)}</div><div class="mapa-resumo-lbl">${M.totLbl} nos ${lista.length} CDs</div>`
-        : `<div class="mapa-resumo-val">${formatBRLCheio(totRecompra)}</div><div class="mapa-resumo-lbl">Recompra represada nos ${lista.length} CDs</div>`;
-    const heroDirLbl = M.money ? `Maior ${M.lbl}` : 'Menor cobertura média';
-    const heroDirVal = destaque ? (M.money ? ' · ' + formatBRLCheio(M.val(destaque)) : ' · ' + destaque.diasMedios.toFixed(0) + 'd') : '';
-
-    box.innerHTML = `
-        <div class="mapa-resumo">
-            <div class="mapa-resumo-item">${heroEsq}</div>
-            <div class="mapa-resumo-item"><div class="mapa-resumo-val">${escapeHtml(destaque ? destaque.cd : '--')}</div><div class="mapa-resumo-lbl">${heroDirLbl}${heroDirVal}</div></div>
-        </div>
-        <div class="mapa-list">${linhas}</div>`;
-}
-
-// ============================================
 // MAPA DE GARGALO (déficit crítico × capital travado por CD)
 // ============================================
 function updateGargalo() {
@@ -3505,7 +3401,7 @@ function updateGargalo() {
     if (!box) return;
     if (!dashboardData) { box.innerHTML = '<div class="empty-state">Carregue uma planilha para mapear os gargalos por CD.</div>'; return; }
 
-    // Mesma regra do Mapa por CD: respeita só o filtro de Curva (global).
+    // Respeita só o filtro de Curva (global), igual às demais visões por CD.
     const prods = originalProducts.filter(p => !filtroCurva.size || filtroCurva.has(p.curva));
     const porCD = {};
     prods.forEach(p => {
@@ -3685,7 +3581,7 @@ function abrirGargaloCD(cd) {
                     ${tabExcesso}
                 </div>
             </div>
-            <div class="cv-modal-foot">Os dois lados do gargalo, separados: o que falta repor (▲) e o que está parado (■). Mesma conta da aba Sugestões e do Mapa por CD.</div>
+            <div class="cv-modal-foot">Os dois lados do gargalo, separados: o que falta repor (▲) e o que está parado (■). Mesma conta da aba Sugestões de Compra.</div>
         </div>`;
 
     const back = document.createElement('div');
@@ -3905,7 +3801,6 @@ function handleTabClick(e) {
     if (tab === 'cd-sales') renderVendasCD();
     if (tab === 'ritmo') updateRitmo();
     if (tab === 'cockpit') updateCockpit();
-    if (tab === 'mapa-cd') updateMapaCD();
     if (tab === 'gargalo') updateGargalo();
     if (tab === 'mudancas') updateMudancas();
 }
@@ -3926,13 +3821,13 @@ function escapeHtml(str) {
 }
 
 function formatStatus(status) {
-    return { deficit: 'Compra', saudavel: 'Compra', reposicao: 'Em reposição', excesso: 'Atenção', 'sem-giro': 'Problema', 'sem-sinal': 'Sem sinal', 'parado': 'Parado' }[status] || status;
+    return { deficit: 'Compra', saudavel: 'Saudável', reposicao: 'Em reposição', excesso: 'Atenção', 'sem-giro': 'Problema', 'sem-sinal': 'Sem sinal', 'parado': 'Parado' }[status] || status;
 }
 
-// Classe de cor pela faixa EXIBIDA (compra/atencao/problema), para o badge não sair
-// com duas cores no "Compra" (déficit vermelho + saudável verde).
+// Classe de cor pela faixa EXIBIDA. Déficit (< 45) = azul "Compra"; saudável (45-60) =
+// verde (acima da meta de 45d); reposição = ciano; atenção/problema laranja/vermelho.
 function statusGrupo(status) {
-    return { deficit: 'compra', saudavel: 'compra', reposicao: 'reposicao', excesso: 'atencao', 'sem-giro': 'problema', 'sem-sinal': 'sem-sinal', 'parado': 'parado' }[status] || status;
+    return { deficit: 'compra', saudavel: 'saudavel', reposicao: 'reposicao', excesso: 'atencao', 'sem-giro': 'problema', 'sem-sinal': 'sem-sinal', 'parado': 'parado' }[status] || status;
 }
 
 // ============================================

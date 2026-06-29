@@ -1778,7 +1778,7 @@ canvas {
 }
 
 /* ============================================
-   COCKPIT · MAPA POR CD · O QUE MUDOU
+   COCKPIT · O QUE MUDOU
    ============================================ */
 
 /* Deltas compartilhados: em recompra/capital travado, SUBIR é ruim. */
@@ -1891,43 +1891,6 @@ canvas {
 .cockpit-card-meta { margin-top: 0.3rem; font-size: 0.74rem; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .cockpit-card-delta { margin-top: 0.55rem; font-size: 0.76rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .cockpit-foot { font-size: 0.74rem; color: var(--text-tertiary); line-height: 1.5; }
-
-/* ---------- MAPA POR CD ---------- */
-.mapa-resumo { display: flex; flex-wrap: wrap; gap: 1.1rem; margin-bottom: 1.4rem; }
-.mapa-resumo-item {
-    flex: 1 1 220px; background: var(--bg-card); border: 1px solid var(--border);
-    border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.3rem;
-}
-.mapa-resumo-val { font-size: 1.5rem; font-weight: 800; color: var(--primary); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.mapa-resumo-lbl { margin-top: 0.3rem; font-size: 0.8rem; color: var(--text-secondary); font-weight: 500; }
-
-.mapa-list { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
-.mapa-row { display: flex; align-items: center; gap: 14px; padding: 0.95rem 1.3rem; border-bottom: 1px solid var(--border-soft); }
-.mapa-row:last-child { border-bottom: none; }
-.mapa-row:hover { background: var(--bg-subtle); }
-.mapa-rank {
-    flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    background: var(--bg-subtle); color: var(--text-secondary);
-    font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums;
-}
-.mapa-row:nth-child(1) .mapa-rank { background: var(--primary); color: #fff; }
-.mapa-row:nth-child(2) .mapa-rank, .mapa-row:nth-child(3) .mapa-rank { background: #dbeafe; color: var(--primary-dark); }
-.mapa-main { flex: 1; min-width: 0; }
-.mapa-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 0.4rem; }
-.mapa-cd { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); }
-.mapa-val { font-size: 0.95rem; font-weight: 800; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.mapa-delta { font-size: 0.78rem; font-weight: 700; margin-left: 6px; }
-.mapa-bar-track { height: 7px; background: var(--bg-subtle); border-radius: 4px; overflow: hidden; }
-.mapa-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary-light), var(--primary)); border-radius: 4px; }
-.mapa-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; margin-top: 0.45rem; font-size: 0.76rem; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-.mapa-meta strong { color: var(--text-secondary); }
-.mapa-meta-cap strong.sem-giro { color: var(--deficit); }
-.mapa-meta-cap strong.excesso { color: var(--excesso); }
-.mapa-meta-tag {
-    font-weight: 700; color: var(--primary); text-transform: uppercase;
-    letter-spacing: 0.03em; font-size: 0.7rem;
-}
 
 /* ---------- O QUE MUDOU ---------- */
 .mudancas-primeira {
