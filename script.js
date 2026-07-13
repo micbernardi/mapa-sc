@@ -4029,6 +4029,13 @@ const XLS_HEADER = {
     alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
     border: XLS_BORDAS
 };
+// Cabeçalho alinhado à esquerda (colunas CD e Material), mantendo o mesmo fundo azul.
+const XLS_HEADER_LEFT = {
+    fill: { patternType: 'solid', fgColor: { rgb: 'FF2563EB' } },
+    font: { color: { rgb: 'FFFFFFFF' }, bold: true },
+    alignment: { horizontal: 'left', vertical: 'center', wrapText: true },
+    border: XLS_BORDAS
+};
 // Status: fundo claro (tinta achatada sobre branco) + texto colorido, como o badge da tela
 function xlsEstiloStatus(statusKey) {
     // Cor pela faixa EXIBIDA (Compra / Atenção / Problema), não pelo status interno,
@@ -4058,8 +4065,12 @@ function xlsEstiloCurva(curva) {
         border: XLS_BORDAS
     };
 }
-const xlsEstiloTexto = alinha => ({ alignment: { horizontal: alinha || 'left', vertical: 'center' }, border: XLS_BORDAS });
-const xlsEstiloNum = fmt => ({ numFmt: fmt, alignment: { horizontal: 'right', vertical: 'center' }, border: XLS_BORDAS });
+const xlsEstiloTexto = (alinha, bold) => {
+    const s = { alignment: { horizontal: alinha || 'left', vertical: 'center' }, border: XLS_BORDAS };
+    if (bold) s.font = { bold: true };
+    return s;
+};
+const xlsEstiloNum = fmt => ({ numFmt: fmt, alignment: { horizontal: 'center', vertical: 'center' }, border: XLS_BORDAS });
 
 function exportarExcel() {
     if (!dashboardData) {
@@ -4134,18 +4145,18 @@ function exportarExcel() {
     const FMT_INT = '#,##0', FMT_BRL = 'R$ #,##0.00';
     const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P'];
 
-    // Cabeçalho (linha 1)
-    COLS.forEach(c => { const cel = ws[c + '1']; if (cel) cel.s = XLS_HEADER; });
+    // Cabeçalho (linha 1): CD e Material à esquerda; demais colunas centralizadas
+    COLS.forEach(c => { const cel = ws[c + '1']; if (cel) cel.s = (c === 'A' || c === 'B') ? XLS_HEADER_LEFT : XLS_HEADER; });
 
     // Linhas de dados (a partir da linha 2)
     ordenada.forEach((p, i) => {
         const r = i + 2;
         const set = (col, estilo) => { const ref = col + r; if (ws[ref]) ws[ref].s = estilo; };
-        set('A', xlsEstiloTexto('center'));   // CD
-        set('B', xlsEstiloTexto('left'));     // Material
-        set('C', xlsEstiloTexto('left'));     // Fornecedor
-        set('D', xlsEstiloTexto('center'));   // SAP
-        set('E', xlsEstiloTexto('center'));   // EAN
+        set('A', xlsEstiloTexto('left'));         // CD (esquerda)
+        set('B', xlsEstiloTexto('left', true));   // Material (esquerda, negrito)
+        set('C', xlsEstiloTexto('center'));       // Fornecedor (centralizado)
+        set('D', xlsEstiloTexto('center'));       // SAP
+        set('E', xlsEstiloTexto('center'));       // EAN
         set('F', xlsEstiloCurva(p.curva));    // Curva (cor)
         set('G', xlsEstiloStatus(p.status));  // Status (cor)
         set('H', xlsEstiloNum(FMT_INT));      // Venda Média
@@ -4163,7 +4174,61 @@ function exportarExcel() {
     XLSX.utils.book_append_sheet(wb, ws, 'Análise de Estoque');
 
     const ref = String(dashboardData.dataReferencia || '').replace(/\//g, '-');
-    XLSX.writeFile(wb, `Analise_Estoque_SantaCruz_${contexto}_${ref || 'export'}.xlsx`);
+    const nomeArquivo = `Analise_Estoque_SantaCruz_${contexto}_${ref || 'export'}.xlsx`;
+    // Congela a primeira linha (cabeçalho) e as colunas A e B (CD e Material): freeze em C2.
+    baixarExcelComCongelamento(wb, nomeArquivo, 'C2');
+}
+
+// Baixa o workbook como .xlsx congelando painel na célula indicada (ex.: 'C2' congela
+// colunas A-B e a linha 1). O xlsx-js-style não grava <pane>, então geramos os bytes e
+// injetamos o elemento no XML da aba via CFB (mesma biblioteca, sem dependência nova).
+// Se algo falhar, cai no download normal preservando cores e alinhamento.
+function baixarExcelComCongelamento(wb, nomeArquivo, topLeft) {
+    let bytes = null;
+    try {
+        bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+        if (!(XLSX.CFB && XLSX.CFB.read && XLSX.CFB.write && XLSX.CFB.utils && XLSX.CFB.utils.cfb_add)) {
+            throw new Error('CFB indisponível');
+        }
+        const cel = XLSX.utils.decode_cell(topLeft);   // { c, r } (0-based)
+        const xSplit = cel.c;   // nº de colunas congeladas (C => 2 => A e B)
+        const ySplit = cel.r;   // nº de linhas congeladas (2 => 1 => linha 1)
+        const cfb = XLSX.CFB.read(new Uint8Array(bytes), { type: 'array' });
+        const paths = cfb.FullPaths || (cfb.FileIndex || []).map(f => f.name);
+        const idx = paths.findIndex(p => /worksheets\/sheet1\.xml$/i.test(p));
+        if (idx < 0) throw new Error('sheet xml não encontrado');
+        let xml = new TextDecoder('utf-8').decode(cfb.FileIndex[idx].content);
+        const pane = `<pane xSplit="${xSplit}" ySplit="${ySplit}" topLeftCell="${topLeft}" activePane="bottomRight" state="frozen"/>`
+            + `<selection pane="bottomRight" activeCell="${topLeft}" sqref="${topLeft}"/>`;
+        if (/<sheetView[^>]*\/>/.test(xml)) {
+            xml = xml.replace(/(<sheetView[^>]*)\/>/, `$1>${pane}</sheetView>`);
+        } else if (/<sheetView[^>]*>/.test(xml)) {
+            xml = xml.replace(/(<sheetView[^>]*>)/, `$1${pane}`);
+        } else {
+            throw new Error('sheetView não encontrado');
+        }
+        XLSX.CFB.utils.cfb_add(cfb, paths[idx], new Uint8Array(new TextEncoder().encode(xml)));
+        const out = XLSX.CFB.write(cfb, { fileType: 'zip', type: 'array' });
+        baixarBytesXlsx(out, nomeArquivo);
+    } catch (e) {
+        console.warn('Congelamento de painel indisponível; exportando sem congelar:', e);
+        try { XLSX.writeFile(wb, nomeArquivo); }
+        catch (_) { if (bytes) baixarBytesXlsx(bytes, nomeArquivo); }
+    }
+}
+
+// Dispara o download de bytes .xlsx no navegador.
+function baixarBytesXlsx(bytes, nomeArquivo) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const blob = new Blob([u8], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nomeArquivo;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function formatBRL(v) {
