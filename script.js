@@ -4077,8 +4077,17 @@ function exportarExcel() {
         return;
     }
 
+    // Regras da planilha de compra: (1) só itens com Sugestão de Compra > 0 e (2) só quem
+    // tem até 45 dias de estoque livre. Produtos em falta na Supera, em excesso/encalhados,
+    // sem necessidade (sugestão = 0) ou já com mais de 45 dias de estoque ficam de fora.
+    const paraCompra = lista.filter(p => memoriaCompra(p).comprar > 0 && Math.round(p.diasLivre) <= 45);
+    if (paraCompra.length === 0) {
+        alert('Nenhum produto com sugestão de compra e até 45 dias de estoque nos filtros atuais. Nada a exportar.');
+        return;
+    }
+
     // Ordem: CD → Material (mantida na exportação)
-    const ordenada = lista
+    const ordenada = paraCompra
         .slice()
         .sort((a, b) => a.cd.localeCompare(b.cd) || a.material.localeCompare(b.material));
 
@@ -4090,6 +4099,7 @@ function exportarExcel() {
             'Material': p.material,
             'Fornecedor': p.fornecedor,
             'SAP': sap,
+            'EAN': String(p.ean || '').replace(/\.0$/, '').trim(),
             'Curva': p.curva,
             'Status': formatStatus(p.status),
             'Venda Média (un/mês)': Math.round(p.vendaMedia),
@@ -4106,16 +4116,17 @@ function exportarExcel() {
 
     const ws = XLSX.utils.json_to_sheet(linhas);
     ws['!cols'] = [
-        { wch: 8 }, { wch: 38 }, { wch: 22 }, { wch: 10 }, { wch: 6 },
-        { wch: 11 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 14 },
-        { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 9 }, { wch: 13 }
+        { wch: 8 }, { wch: 38 }, { wch: 22 }, { wch: 10 }, { wch: 16 },
+        { wch: 6 }, { wch: 11 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
+        { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 9 },
+        { wch: 13 }
     ];
-    ws['!autofilter'] = { ref: `A1:O${linhas.length + 1}` };
+    ws['!autofilter'] = { ref: `A1:P${linhas.length + 1}` };
     ws['!rows'] = [{ hpt: 26 }]; // cabeçalho um pouco mais alto
 
     // --- Formatação e cores (igual ao dashboard) ---
     const FMT_INT = '#,##0', FMT_BRL = 'R$ #,##0.00';
-    const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'];
+    const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P'];
 
     // Cabeçalho (linha 1)
     COLS.forEach(c => { const cel = ws[c + '1']; if (cel) cel.s = XLS_HEADER; });
@@ -4128,17 +4139,18 @@ function exportarExcel() {
         set('B', xlsEstiloTexto('left'));     // Material
         set('C', xlsEstiloTexto('left'));     // Fornecedor
         set('D', xlsEstiloTexto('center'));   // SAP
-        set('E', xlsEstiloCurva(p.curva));    // Curva (cor)
-        set('F', xlsEstiloStatus(p.status));  // Status (cor)
-        set('G', xlsEstiloNum(FMT_INT));      // Venda Média
-        set('H', xlsEstiloNum(FMT_INT));      // Estoque Livre (un)
-        set('I', xlsEstiloNum(FMT_BRL));      // Estoque Livre (R$)
-        set('J', xlsEstiloNum(FMT_INT));      // A Caminho
-        set('K', xlsEstiloNum(FMT_INT));      // Dias Estoque
-        set('L', xlsEstiloNum(FMT_INT));      // Meta Cobertura
-        set('M', xlsEstiloNum(FMT_INT));      // Sugestão Compra
-        set('N', xlsEstiloNum(FMT_INT));      // Caixas
-        set('O', xlsEstiloNum(FMT_INT));      // Múltiplo Caixa
+        set('E', xlsEstiloTexto('center'));   // EAN
+        set('F', xlsEstiloCurva(p.curva));    // Curva (cor)
+        set('G', xlsEstiloStatus(p.status));  // Status (cor)
+        set('H', xlsEstiloNum(FMT_INT));      // Venda Média
+        set('I', xlsEstiloNum(FMT_INT));      // Estoque Livre (un)
+        set('J', xlsEstiloNum(FMT_BRL));      // Estoque Livre (R$)
+        set('K', xlsEstiloNum(FMT_INT));      // A Caminho
+        set('L', xlsEstiloNum(FMT_INT));      // Dias Estoque
+        set('M', xlsEstiloNum(FMT_INT));      // Meta Cobertura
+        set('N', xlsEstiloNum(FMT_INT));      // Sugestão Compra
+        set('O', xlsEstiloNum(FMT_INT));      // Caixas
+        set('P', xlsEstiloNum(FMT_INT));      // Múltiplo Caixa
     });
 
     const wb = XLSX.utils.book_new();
