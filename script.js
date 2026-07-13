@@ -4078,11 +4078,17 @@ function exportarExcel() {
     }
 
     // Regras da planilha de compra: (1) só itens com Sugestão de Compra > 0 e (2) só quem
-    // tem até 45 dias de estoque livre. Produtos em falta na Supera, em excesso/encalhados,
-    // sem necessidade (sugestão = 0) ou já com mais de 45 dias de estoque ficam de fora.
-    const paraCompra = lista.filter(p => memoriaCompra(p).comprar > 0 && Math.round(p.diasLivre) <= 45);
+    // tem dias de estoque (estoque livre atual) dentro da meta de cobertura do produto.
+    // O limite acompanha a "Meta de dias" que você definir (global ou ajustada por linha),
+    // ou seja, o mesmo alvo usado no cálculo da sugestão e exibido na coluna Meta Cobertura.
+    // Itens com dias de estoque ACIMA da meta ficam de fora, junto com faltas na Supera e
+    // itens sem sugestão.
+    const paraCompra = lista.filter(p => {
+        const mc = memoriaCompra(p);
+        return mc.comprar > 0 && Math.round(p.diasLivre) <= mc.diasMeta;
+    });
     if (paraCompra.length === 0) {
-        alert('Nenhum produto com sugestão de compra e até 45 dias de estoque nos filtros atuais. Nada a exportar.');
+        alert('Nenhum produto com sugestão de compra e dias de estoque dentro da meta nos filtros atuais. Nada a exportar.');
         return;
     }
 
