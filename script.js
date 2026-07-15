@@ -188,7 +188,7 @@ if (faltasClearBtn) faltasClearBtn.addEventListener('click', limparFaltas);
 tabButtons.forEach(btn => btn.addEventListener('click', handleTabClick));
 
 productSearch.addEventListener('input', applyFilters);
-sortBy.addEventListener('change', applyFilters);
+sortBy.addEventListener('change', () => { prodSortDoSelect(); applyFilters(); });
 recFilter.addEventListener('change', updateRecommendations);
 if (ritmoFilter) ritmoFilter.addEventListener('change', updateRitmo);
 if (ritmoViewSel) ritmoViewSel.addEventListener('change', () => {
@@ -362,6 +362,11 @@ document.getElementById('detailBlocks').addEventListener('click', (e) => {
     const th = e.target.closest('th.sortable');
     if (th && th.dataset.sortKey) ordenarDetalhePor(th.dataset.sortKey);
 });
+// Ordenação por clique no cabeçalho da tabela da aba Produtos
+document.getElementById('productsTableHead').addEventListener('click', (e) => {
+    const th = e.target.closest('th.sortable');
+    if (th && th.dataset.sortKey) ordenarProdPor(th.dataset.sortKey);
+});
 
 // Estado da aba Detalhes (multi-seleção)
 const detailCDs = new Set();        // CDs selecionados (vazio = todos)
@@ -392,8 +397,8 @@ document.querySelectorAll('.kpi-clickable').forEach(card => {
             if (kpi === 'excesso') filtroStatus.add('excesso');       // atenção 60-100
             else if (kpi === 'sem-giro') filtroStatus.add('sem-giro'); // problema > 100
             // garante ordenação útil
-            if (kpi === 'excesso' || kpi === 'sem-giro') sortBy.value = 'dias-desc';
-            else if (kpi === 'total') sortBy.value = 'estoque-desc';
+            if (kpi === 'excesso' || kpi === 'sem-giro') { sortBy.value = 'dias-desc'; prodSortDoSelect(); }
+            else if (kpi === 'total') { sortBy.value = 'estoque-desc'; prodSortDoSelect(); }
             aplicarTudo();
             ativarAba('products');
         }
@@ -1131,6 +1136,8 @@ function clearDashboard() {
     recListaAtual = [];
     detailSort = { key: null, dir: 'desc' };
     recSort = { key: null, dir: 'desc' };
+    prodSort = { key: 'dias', dir: 'asc' };
+    sortBy.value = 'dias-asc';
     document.getElementById('dataDate').textContent = '--';
 
     document.getElementById('productsTableBody').innerHTML =
@@ -1210,7 +1217,6 @@ function applyFilters() {
     if (!dashboardData) return;
 
     const search = productSearch.value.toLowerCase();
-    const sort = sortBy.value || 'dias-asc';
 
     let filtered = baseAtual().filter(p => {
         if (currentView === 'cd' && filtroCD.size && !filtroCD.has(p.cd)) return false;
@@ -1222,14 +1228,7 @@ function applyFilters() {
         return true;
     });
 
-    switch (sort) {
-        case 'dias-asc': filtered.sort((a, b) => a.diasLivre - b.diasLivre); break;
-        case 'dias-desc': filtered.sort((a, b) => b.diasLivre - a.diasLivre); break;
-        case 'venda-desc': filtered.sort((a, b) => b.vendaMedia - a.vendaMedia); break;
-        case 'estoque-desc': filtered.sort((a, b) => b.estoqueLivre - a.estoqueLivre); break;
-    }
-
-    allProducts = filtered;
+    allProducts = aplicarOrdenacaoProd(filtered);
     updateProductsTable();
     updateKPIs();
     updateCharts();        // redesenha donut + barra por CD com a base JÁ FILTRADA
@@ -1344,10 +1343,111 @@ function isFilterActive() {
     return filtroCD.size || filtroCurva.size || filtroStatus.size || productSearch.value;
 }
 
+// ── Ordenação da aba Produtos (clique no cabeçalho) ─────────────────────────
+// prodSort é a fonte única da ordem da tabela. O select "Ordenar por" continua
+// funcionando: é apenas um atalho para as combinações mais usadas e fica
+// sincronizado com o estado (fica em branco quando a coluna clicada não tem
+// opção equivalente no select).
+let prodSort = { key: 'dias', dir: 'asc' };
+
+// Colunas que começam em ordem crescente no primeiro clique: texto (A→Z) e
+// Status (do mais crítico ao mais parado). As demais começam do maior→menor.
+const COLS_ASC_PROD = ['cd', 'material', 'curva', 'status'];
+
+// Ordem lógica do Status: em falta / compra primeiro, parado por último
+const ORDEM_STATUS_PROD = { falta: 0, deficit: 1, reposicao: 2, saudavel: 3, excesso: 4, 'sem-giro': 5, parado: 6, 'sem-sinal': 7 };
+
+// Valor de uma linha para a coluna escolhida (aba Produtos)
+function valorOrdProd(p, key) {
+    switch (key) {
+        // na visão SKU a 1ª coluna mostra o nº de CDs, então ordena por ele
+        case 'cd': return currentView === 'sku' ? (p.nCDs || 0) : p.cd;
+        case 'material': return rotuloProduto(p).toLowerCase();
+        case 'caminho': return (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
+        case 'curva': return p.curva;
+        case 'venda': return p.vendaMedia;
+        case 'estoque': return p.estoqueLivre;
+        case 'dias': return p.diasLivre;
+        case 'status': return ORDEM_STATUS_PROD[p.status] ?? 99;
+        default: return 0;
+    }
+}
+
+// Ordena sem mutar a lista original. Sort estável: empates caem em material + CD.
+function aplicarOrdenacaoProd(lista) {
+    if (!prodSort.key) return lista;
+    const fator = prodSort.dir === 'asc' ? 1 : -1;
+    return lista.slice().sort((a, b) => {
+        const va = valorOrdProd(a, prodSort.key);
+        const vb = valorOrdProd(b, prodSort.key);
+        let cmp = (typeof va === 'string' || typeof vb === 'string')
+            ? String(va).localeCompare(String(vb), 'pt-BR')
+            : (va - vb);
+        if (cmp === 0) {
+            cmp = rotuloProduto(a).localeCompare(rotuloProduto(b), 'pt-BR') ||
+                String(a.cd || '').localeCompare(String(b.cd || ''), 'pt-BR');
+            return cmp; // desempate sempre A→Z, independente da direção
+        }
+        return fator * cmp;
+    });
+}
+
+// Clique no cabeçalho: define a coluna ou inverte a direção e redesenha
+function ordenarProdPor(key) {
+    if (prodSort.key === key) {
+        prodSort.dir = prodSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+        prodSort.key = key;
+        prodSort.dir = COLS_ASC_PROD.includes(key) ? 'asc' : 'desc';
+    }
+    sincronizaSelectOrdem();
+    // reordena a base filtrada para o Excel exportado sair na mesma ordem da tela
+    allProducts = aplicarOrdenacaoProd(allProducts);
+    updateProductsTable();
+}
+
+// Traduz o select "Ordenar por" (values no formato chave-direcao) para o estado
+function prodSortDoSelect() {
+    const [key, dir] = (sortBy.value || 'dias-asc').split('-');
+    prodSort = { key, dir };
+}
+
+// Deixa o select coerente com a coluna clicada; -1 = nenhuma opção equivalente
+function sincronizaSelectOrdem() {
+    const alvo = prodSort.key + '-' + prodSort.dir;
+    sortBy.selectedIndex = Array.from(sortBy.options).findIndex(o => o.value === alvo);
+}
+
+// Monta um <th> clicável da aba Produtos, com indicador de seta na coluna ativa
+function thProd(key, label, title) {
+    const ativo = prodSort.key === key;
+    const seta = ativo
+        ? `<span class="sort-arrow active">${prodSort.dir === 'asc' ? '▲' : '▼'}</span>`
+        : '<span class="sort-arrow">⇅</span>';
+    return `<th class="sortable${ativo ? ' sort-active' : ''}" data-sort-key="${key}"${title ? ` title="${title}"` : ''}>${label} ${seta}</th>`;
+}
+
+// Redesenha o cabeçalho marcando a coluna e a direção ativas
+function renderProdHead() {
+    const tr = document.getElementById('productsTableHead');
+    if (!tr) return;
+    tr.innerHTML = [
+        thProd('cd', currentView === 'sku' ? 'CDs' : 'CD'),
+        thProd('material', 'Material'),
+        thProd('caminho', 'A caminho', 'Pendência de trânsito + entrega: mercadoria comprada a caminho do CD'),
+        thProd('curva', 'Curva'),
+        thProd('venda', 'Venda/mês'),
+        thProd('estoque', 'Estoque Livre'),
+        thProd('dias', 'Dias Estoque'),
+        thProd('status', 'Status')
+    ].join('');
+}
+
 function updateProductsTable() {
     if (!dashboardData) return;
     const tbody = document.getElementById('productsTableBody');
-    const prods = (allProducts.length > 0 || isFilterActive()) ? allProducts : baseAtual();
+    renderProdHead();
+    const prods = aplicarOrdenacaoProd((allProducts.length > 0 || isFilterActive()) ? allProducts : baseAtual());
     const isSku = currentView === 'sku';
 
     if (prods.length === 0) {
@@ -3537,7 +3637,7 @@ function updateCockpit() {
             } else {
                 filtroStatus.clear();
                 filtroStatus.add(goto === 'problema' ? 'sem-giro' : 'excesso');
-                sortBy.value = 'dias-desc';
+                sortBy.value = 'dias-desc'; prodSortDoSelect();
                 aplicarTudo();
                 ativarAba('products');
             }

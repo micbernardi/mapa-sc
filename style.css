@@ -368,7 +368,7 @@ canvas {
 .products-table thead th:first-child { border-top-left-radius: 12px; }
 .products-table thead th:last-child { border-top-right-radius: 12px; }
 
-/* Cabeçalho ordenável (aba Detalhes) */
+/* Cabeçalho ordenável (abas Produtos, Sugestões e Detalhes) */
 .products-table th.sortable {
     cursor: pointer;
     user-select: none;
