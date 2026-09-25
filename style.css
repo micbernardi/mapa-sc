@@ -2152,6 +2152,18 @@ canvas {
 }
 .cv-modal-x:hover { background: var(--bg-subtle); color: var(--text-primary); border-color: var(--text-tertiary); }
 
+/* Gargalo: ações do cabeçalho do modal (Excel + fechar) */
+.gq-modal-acoes { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.gq-btn-excel {
+    height: 34px; padding: 0 0.85rem; display: inline-flex; align-items: center; gap: 0.4rem;
+    border: 1px solid #15803d; background: #16a34a; color: #fff; border-radius: 9px;
+    font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    transition: background 0.16s ease, transform 0.08s ease;
+}
+.gq-btn-excel:hover { background: #15803d; }
+.gq-btn-excel:active { transform: translateY(1px); }
+.gq-btn-excel:focus-visible { outline: 2px solid #86efac; outline-offset: 2px; }
+
 .cv-modal-body { overflow-y: auto; }
 .cv-modal-table { width: 100%; border-collapse: collapse; }
 .cv-modal-table thead th {

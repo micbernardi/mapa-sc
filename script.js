@@ -773,6 +773,9 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
             fornecedor: String(row['Fornecedor'] || '').trim(),
             codigoSAP: codigoSAP,
             ean: ean,
+            // Códigos da Santa Cruz / fornecedor, usados na exportação do Gargalo.
+            codigoLegado: String(row['Código Legado'] || '').trim(),
+            codFornecedor: String(row['Cód. Fornecedor'] || '').trim(),
             statusMaterial: String(row['Status Material'] || '').trim(),
             pf: 0,
 
@@ -848,6 +851,8 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
     // Completa metadados que possam ter vindo vazios na 1ª linha
     if (!o.fornecedor) o.fornecedor = String(row['Fornecedor'] || '').trim();
     if (!o.codigoSAP) o.codigoSAP = String(row['Código SAP'] || '');
+    if (!o.codigoLegado) o.codigoLegado = String(row['Código Legado'] || '').trim();
+    if (!o.codFornecedor) o.codFornecedor = String(row['Cód. Fornecedor'] || '').trim();
 }
 
 function finalizarProduto(p) {
@@ -928,6 +933,8 @@ function agregarPorSKU(products, diasCorridos) {
                 fornecedor: p.fornecedor,
                 codigoSAP: p.codigoSAP,
                 ean: p.ean,
+                codigoLegado: p.codigoLegado,
+                codFornecedor: p.codFornecedor,
                 statusMaterial: p.statusMaterial,
                 pf: p.pf,
                 vendas: [0, 0, 0, 0, 0],
@@ -3840,7 +3847,13 @@ function abrirGargaloCD(cd) {
                         <div class="cv-modal-eyebrow">Gargalo · CD</div>
                         <div class="cv-modal-tot">${escapeHtml(cd)}</div>
                     </div>
-                    <button type="button" class="cv-modal-x" aria-label="Fechar">×</button>
+                    <div class="gq-modal-acoes">
+                        <button type="button" class="gq-btn-excel" title="Baixar em Excel os itens a comprar e em excesso deste CD, com códigos SAP, Legado e EAN">
+                            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 1.5v8.2M4.8 6.6 8 9.8l3.2-3.2M2.5 11.5v2h11v-2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            Excel
+                        </button>
+                        <button type="button" class="cv-modal-x" aria-label="Fechar">×</button>
+                    </div>
                 </div>
                 <div class="gq-tabs" role="tablist">
                     <button type="button" class="gq-tab gq-tab-def active" data-sec="compra" role="tab"><span class="gq-tab-ico">▲</span> <strong>${compra.length}</strong> a comprar <span class="gq-tab-rs">${formatBRLCheio(totCompraRS)}</span></button>
@@ -3869,6 +3882,7 @@ function abrirGargaloCD(cd) {
 
     back.addEventListener('click', e => { if (e.target === back) fecharGargaloModal(); });
     back.querySelector('.cv-modal-x').addEventListener('click', fecharGargaloModal);
+    back.querySelector('.gq-btn-excel').addEventListener('click', () => exportarGargaloCD(cd, compra, excesso));
     document.addEventListener('keydown', gqModalEsc);
 
     // Abas: clicar em "a comprar" / "em excesso" troca qual bloco aparece (sem rolar até o fim).
@@ -3880,6 +3894,122 @@ function abrirGargaloCD(cd) {
             back.querySelector('.cv-modal-body').scrollTop = 0;
         });
     });
+}
+
+// Exporta o drill-down do Gargalo de um CD: duas abas (A comprar / Em excesso), mesmas
+// linhas e ordem do modal, com os códigos da Santa Cruz (SAP e Legado), EAN e fornecedor.
+function exportarGargaloCD(cd, compra, excesso) {
+    if (typeof XLSX === 'undefined') { alert('Biblioteca de Excel não carregada.'); return; }
+    if (!compra.length && !excesso.length) { alert('Nada a exportar neste CD.'); return; }
+
+    const limpa = v => String(v == null ? '' : v).replace(/\.0$/, '').trim();
+    const FMT_INT = '#,##0', FMT_BRL = 'R$ #,##0.00';
+
+    // Colunas comuns às duas abas (A..N): identificação do item + posição de estoque.
+    const base = p => ({
+        'CD': p.cd,
+        'Código SAP': limpa(p.codigoSAP),
+        'Código Legado': limpa(p.codigoLegado),
+        'EAN': limpa(p.ean),
+        'Material': p.material,
+        'Fornecedor': p.fornecedor,
+        'Cód. Fornecedor': limpa(p.codFornecedor),
+        'Curva': p.curva,
+        'Status': formatStatus(p.status),
+        'PF (R$)': +(p.pf || 0).toFixed(2),
+        'Venda Média (un/mês)': Math.round(p.vendaMedia || 0),
+        'Estoque Livre (un)': Math.round(p.estoqueLivre || 0),
+        'A Caminho (un)': Math.round((p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0)),
+        'Dias Estoque': Math.round(p.diasLivre || 0)
+    });
+    const estBase = [
+        xlsEstiloTexto('center'), xlsEstiloTexto('center'), xlsEstiloTexto('center'), xlsEstiloTexto('center'),
+        xlsEstiloTexto('left', true), xlsEstiloTexto('left'), xlsEstiloTexto('center'),
+        null /* curva: por linha */, null /* status: por linha */,
+        xlsEstiloNum(FMT_BRL), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT)
+    ];
+    const larguraBase = [8, 11, 13, 16, 40, 28, 13, 7, 11, 11, 14, 14, 12, 10];
+    const COL_TEXTO = [1, 2, 3, 6];   // SAP, Legado, EAN, Cód. Fornecedor
+
+    const montarAba = (linhas, prods, extraEst, extraLarg, totais) => {
+        const ws = XLSX.utils.json_to_sheet(linhas);
+        const nCols = Object.keys(linhas[0]).length;
+        const col = XLSX.utils.encode_col;
+        const ult = col(nCols - 1);
+        ws['!cols'] = larguraBase.concat(extraLarg).map(w => ({ wch: w }));
+        ws['!autofilter'] = { ref: `A1:${ult}${linhas.length + 1}` };
+        ws['!rows'] = [{ hpt: 30 }];
+        for (let c = 0; c < nCols; c++) {
+            const cel = ws[col(c) + '1'];
+            if (cel) cel.s = (c === 4 || c === 5) ? XLS_HEADER_LEFT : XLS_HEADER;
+        }
+        prods.forEach((p, i) => {
+            const r = i + 2;
+            const est = estBase.slice();
+            est[7] = xlsEstiloCurva(p.curva);
+            est[8] = xlsEstiloStatus(p.status);
+            est.concat(extraEst).forEach((s, c) => {
+                const cel = ws[col(c) + r];
+                if (cel && s) cel.s = s;
+            });
+            // Códigos gravados como TEXTO: o EAN não vira notação científica no Excel.
+            COL_TEXTO.forEach(c => { const cel = ws[col(c) + r]; if (cel) { cel.t = 's'; cel.v = String(cel.v); cel.z = '@'; } });
+        });
+        // Linha de TOTAL no rodapé.
+        const r = prods.length + 2;
+        const estTot = { font: { bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'FFF1F5F9' } }, border: XLS_BORDAS, alignment: { horizontal: 'center', vertical: 'center' } };
+        for (let c = 0; c < nCols; c++) ws[col(c) + r] = { t: 's', v: '', s: estTot };
+        ws['E' + r] = { t: 's', v: `TOTAL · ${prods.length} ${prods.length === 1 ? 'item' : 'itens'}`, s: { ...estTot, alignment: { horizontal: 'left', vertical: 'center' } } };
+        Object.entries(totais).forEach(([c, { v, fmt }]) => { ws[c + r] = { t: 'n', v, z: fmt, s: { ...estTot, numFmt: fmt } }; });
+        ws['!ref'] = `A1:${ult}${r}`;
+        return ws;
+    };
+
+    const wb = XLSX.utils.book_new();
+
+    if (compra.length) {
+        const linhas = compra.map(({ p, m }) => {
+            const memo = memoriaCompra(p);
+            return {
+                ...base(p),
+                'Meta Cobertura (dias)': memo.diasMeta,
+                'Un a Comprar': m.un,
+                'Caixas': memo.temMultiplo ? memo.caixas : '',
+                'Múltiplo Caixa': memo.temMultiplo ? memo.multiplo : '',
+                'R$ Represado': +(m.rs || 0).toFixed(2)
+            };
+        });
+        const extraEst = [
+            xlsEstiloNum(FMT_INT),
+            { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF1D4ED8' } } },
+            xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT),
+            { ...xlsEstiloNum(FMT_BRL), font: { bold: true } }
+        ];
+        const ws = montarAba(linhas, compra.map(x => x.p), extraEst, [13, 12, 8, 10, 15], {
+            P: { v: compra.reduce((s, x) => s + x.m.un, 0), fmt: FMT_INT },
+            S: { v: +compra.reduce((s, x) => s + x.m.rs, 0).toFixed(2), fmt: FMT_BRL }
+        });
+        XLSX.utils.book_append_sheet(wb, ws, 'A comprar');
+    }
+
+    if (excesso.length) {
+        const linhas = excesso.map(p => ({
+            ...base(p),
+            'R$ Travado': +(p.estoqueLivreRS || 0).toFixed(2),
+            'Data Última Entrada': p.dataUltimaEntrada || ''
+        }));
+        const extraEst = [{ ...xlsEstiloNum(FMT_BRL), font: { bold: true } }, xlsEstiloTexto('center')];
+        const ws = montarAba(linhas, excesso, extraEst, [15, 14], {
+            L: { v: excesso.reduce((s, p) => s + Math.round(p.estoqueLivre || 0), 0), fmt: FMT_INT },
+            O: { v: +excesso.reduce((s, p) => s + (p.estoqueLivreRS || 0), 0).toFixed(2), fmt: FMT_BRL }
+        });
+        XLSX.utils.book_append_sheet(wb, ws, 'Em excesso');
+    }
+
+    const ref = String((dashboardData && dashboardData.dataReferencia) || '').replace(/\//g, '-');
+    const nome = `Gargalo_${String(cd).replace(/[^\w-]/g, '')}_SantaCruz_${ref || 'export'}.xlsx`;
+    // Congela cabeçalho + colunas A..E (até Material) nas duas abas.
+    baixarExcelComCongelamento(wb, nome, 'F2');
 }
 
 // ============================================
@@ -4295,19 +4425,22 @@ function baixarExcelComCongelamento(wb, nomeArquivo, topLeft) {
         const ySplit = cel.r;   // nº de linhas congeladas (2 => 1 => linha 1)
         const cfb = XLSX.CFB.read(new Uint8Array(bytes), { type: 'array' });
         const paths = cfb.FullPaths || (cfb.FileIndex || []).map(f => f.name);
-        const idx = paths.findIndex(p => /worksheets\/sheet1\.xml$/i.test(p));
-        if (idx < 0) throw new Error('sheet xml não encontrado');
-        let xml = new TextDecoder('utf-8').decode(cfb.FileIndex[idx].content);
+        // Congela TODAS as abas do arquivo (a exportação do Gargalo tem duas).
+        const idxs = paths.map((p, i) => /worksheets\/sheet\d+\.xml$/i.test(p) ? i : -1).filter(i => i >= 0);
+        if (!idxs.length) throw new Error('sheet xml não encontrado');
         const pane = `<pane xSplit="${xSplit}" ySplit="${ySplit}" topLeftCell="${topLeft}" activePane="bottomRight" state="frozen"/>`
             + `<selection pane="bottomRight" activeCell="${topLeft}" sqref="${topLeft}"/>`;
-        if (/<sheetView[^>]*\/>/.test(xml)) {
-            xml = xml.replace(/(<sheetView[^>]*)\/>/, `$1>${pane}</sheetView>`);
-        } else if (/<sheetView[^>]*>/.test(xml)) {
-            xml = xml.replace(/(<sheetView[^>]*>)/, `$1${pane}`);
-        } else {
-            throw new Error('sheetView não encontrado');
-        }
-        XLSX.CFB.utils.cfb_add(cfb, paths[idx], new Uint8Array(new TextEncoder().encode(xml)));
+        idxs.forEach(idx => {
+            let xml = new TextDecoder('utf-8').decode(cfb.FileIndex[idx].content);
+            if (/<sheetView[^>]*\/>/.test(xml)) {
+                xml = xml.replace(/(<sheetView[^>]*)\/>/, `$1>${pane}</sheetView>`);
+            } else if (/<sheetView[^>]*>/.test(xml)) {
+                xml = xml.replace(/(<sheetView[^>]*>)/, `$1${pane}`);
+            } else {
+                throw new Error('sheetView não encontrado');
+            }
+            XLSX.CFB.utils.cfb_add(cfb, paths[idx], new Uint8Array(new TextEncoder().encode(xml)));
+        });
         const out = XLSX.CFB.write(cfb, { fileType: 'zip', type: 'array' });
         baixarBytesXlsx(out, nomeArquivo);
     } catch (e) {
