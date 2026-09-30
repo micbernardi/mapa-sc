@@ -384,6 +384,12 @@ canvas {
 .products-table th.sortable:hover .sort-arrow { color: var(--primary); }
 .sort-arrow.active { color: var(--primary); }
 
+/* Cabeçalho ordenável no modal do Gargalo por CD */
+.cv-modal-table th.sortable { cursor: pointer; user-select: none; transition: color 0.15s ease; }
+.cv-modal-table th.sortable:hover,
+.cv-modal-table th.sort-active { color: var(--primary); }
+.cv-modal-table th.sortable:hover .sort-arrow { color: var(--primary); }
+
 .products-table td {
     padding: 0.8rem 1rem;
     border-bottom: 1px solid var(--border);

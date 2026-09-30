@@ -3805,38 +3805,82 @@ function abrirGargaloCD(cd) {
     const totCompraUn = compra.reduce((s, x) => s + x.m.un, 0);
     const totExcRS = excesso.reduce((s, p) => s + p.estoqueLivreRS, 0);
 
-    const tabCompra = compra.length ? `
-        <table class="cv-modal-table gq-sec-table">
-            <thead><tr>
-                <th>Produto</th>
-                <th class="cvm-num">Un a comprar</th>
-                <th class="cvm-num">R$ represado</th>
-                <th class="cvm-num">Cobertura</th>
-            </tr></thead>
-            <tbody>${compra.map(x => `
+    // Colunas ordenáveis dos dois blocos. `val` é o que se compara; `txt` = ordem alfabética.
+    // A ordenação é feita NO PRÓPRIO array (compra/excesso), então o Excel sai na mesma ordem da tela.
+    const GQ_COLS = {
+        compra: [
+            { key: 'prod', label: 'Produto',      txt: true, val: x => rotuloProduto(x.p) },
+            { key: 'un',   label: 'Un a comprar', val: x => x.m.un },
+            { key: 'rs',   label: 'R$ represado', val: x => x.m.rs },
+            { key: 'cob',  label: 'Cobertura',    val: x => x.p.diasLivre }
+        ],
+        excesso: [
+            { key: 'prod', label: 'Produto',       txt: true, val: p => rotuloProduto(p) },
+            { key: 'un',   label: 'Estoque livre', val: p => p.estoqueLivre },
+            { key: 'rs',   label: 'R$ travado',    val: p => p.estoqueLivreRS },
+            { key: 'cob',  label: 'Cobertura',     val: p => p.diasLivre }
+        ]
+    };
+    const GQ_DADOS = { compra, excesso };
+    const GQ_PADRAO = { compra: { key: 'cob', dir: 'asc' }, excesso: { key: 'rs', dir: 'desc' } };
+    const gqSort = { compra: { ...GQ_PADRAO.compra }, excesso: { ...GQ_PADRAO.excesso } };
+    const GQ_PREFIXO = { compra: 'déficit &lt; 45 dias', excesso: '&gt; 100 dias' };
+
+    const linhaCompra = x => `
                 <tr>
                     <td class="cvm-prod">${escapeHtml(rotuloProduto(x.p))}</td>
                     <td class="cvm-un">${fmtUn(x.m.un)}</td>
                     <td class="cvm-rs">${formatBRLCheio(x.m.rs)}</td>
                     <td class="cvm-cob cvm-cob-def">≈ ${fmtUn(x.p.diasLivre)} d</td>
-                </tr>`).join('')}</tbody>
-        </table>` : '<div class="gq-sec-vazio">Nenhum item em déficit a comprar neste CD.</div>';
-
-    const tabExcesso = excesso.length ? `
-        <table class="cv-modal-table gq-sec-table">
-            <thead><tr>
-                <th>Produto</th>
-                <th class="cvm-num">Estoque livre</th>
-                <th class="cvm-num">R$ travado</th>
-                <th class="cvm-num">Cobertura</th>
-            </tr></thead>
-            <tbody>${excesso.map(p => `
+                </tr>`;
+    const linhaExcesso = p => `
                 <tr>
                     <td class="cvm-prod">${escapeHtml(rotuloProduto(p))}</td>
                     <td class="cvm-un gq-un-neutro">${fmtUn(p.estoqueLivre)} un</td>
                     <td class="cvm-rs">${formatBRLCheio(p.estoqueLivreRS)}</td>
                     <td class="cvm-cob cvm-cob-exc">≈ ${fmtUn(p.diasLivre)} d</td>
-                </tr>`).join('')}</tbody>
+                </tr>`;
+    const GQ_LINHA = { compra: linhaCompra, excesso: linhaExcesso };
+
+    const gqThead = sec => `<tr>${GQ_COLS[sec].map(c => {
+        const ativo = gqSort[sec].key === c.key;
+        const seta = ativo
+            ? `<span class="sort-arrow active">${gqSort[sec].dir === 'asc' ? '▲' : '▼'}</span>`
+            : '<span class="sort-arrow">⇅</span>';
+        const cls = ['sortable', c.txt ? '' : 'cvm-num', ativo ? 'sort-active' : ''].filter(Boolean).join(' ');
+        return `<th class="${cls}" data-sort-key="${c.key}" title="Ordenar por ${c.label}">${c.label} ${seta}</th>`;
+    }).join('')}</tr>`;
+    const gqTbody = sec => GQ_DADOS[sec].map(GQ_LINHA[sec]).join('');
+    const gqHint = sec => {
+        const st = gqSort[sec], pad = GQ_PADRAO[sec];
+        if (st.key === pad.key && st.dir === pad.dir)
+            return `${GQ_PREFIXO[sec]} · ${sec === 'compra' ? 'mais crítico primeiro' : 'maior capital primeiro'}`;
+        const col = GQ_COLS[sec].find(c => c.key === st.key);
+        const sentido = col.txt ? (st.dir === 'asc' ? 'A→Z' : 'Z→A') : (st.dir === 'asc' ? 'menor→maior' : 'maior→menor');
+        return `${GQ_PREFIXO[sec]} · por ${col.label.toLowerCase()} (${sentido})`;
+    };
+    const gqOrdenar = sec => {
+        const cols = GQ_COLS[sec];
+        const col = cols.find(c => c.key === gqSort[sec].key);
+        const nome = cols[0].val;   // desempate: nome do produto
+        const f = gqSort[sec].dir === 'asc' ? 1 : -1;
+        const cmpTxt = (a, b) => String(a).localeCompare(String(b), 'pt-BR', { sensitivity: 'base', numeric: true });
+        GQ_DADOS[sec].sort((a, b) => {
+            const c = col.txt ? cmpTxt(col.val(a), col.val(b)) : (col.val(a) || 0) - (col.val(b) || 0);
+            return (c * f) || cmpTxt(nome(a), nome(b));
+        });
+    };
+
+    const tabCompra = compra.length ? `
+        <table class="cv-modal-table gq-sec-table">
+            <thead>${gqThead('compra')}</thead>
+            <tbody>${gqTbody('compra')}</tbody>
+        </table>` : '<div class="gq-sec-vazio">Nenhum item em déficit a comprar neste CD.</div>';
+
+    const tabExcesso = excesso.length ? `
+        <table class="cv-modal-table gq-sec-table">
+            <thead>${gqThead('excesso')}</thead>
+            <tbody>${gqTbody('excesso')}</tbody>
         </table>` : '<div class="gq-sec-vazio">Nenhum item travado (> 100 dias) neste CD.</div>';
 
     const html = `
@@ -3862,11 +3906,11 @@ function abrirGargaloCD(cd) {
             </div>
             <div class="cv-modal-body">
                 <div class="gq-sec gq-sec-compra" data-sec="compra">
-                    <div class="gq-sec-hint">déficit &lt; 45 dias · mais crítico primeiro</div>
+                    <div class="gq-sec-hint">${gqHint('compra')}</div>
                     ${tabCompra}
                 </div>
                 <div class="gq-sec gq-sec-excesso gq-sec-hidden" data-sec="excesso">
-                    <div class="gq-sec-hint">&gt; 100 dias · maior capital primeiro</div>
+                    <div class="gq-sec-hint">${gqHint('excesso')}</div>
                     ${tabExcesso}
                 </div>
             </div>
@@ -3884,6 +3928,24 @@ function abrirGargaloCD(cd) {
     back.querySelector('.cv-modal-x').addEventListener('click', fecharGargaloModal);
     back.querySelector('.gq-btn-excel').addEventListener('click', () => exportarGargaloCD(cd, compra, excesso));
     document.addEventListener('keydown', gqModalEsc);
+
+    // Ordenação por clique no cabeçalho: mesma coluna inverte o sentido; coluna nova começa
+    // em A→Z (texto) ou maior→menor (números).
+    back.querySelectorAll('.gq-sec').forEach(secEl => {
+        const sec = secEl.getAttribute('data-sec');
+        secEl.addEventListener('click', e => {
+            const th = e.target.closest('th.sortable');
+            if (!th) return;
+            const key = th.dataset.sortKey;
+            const col = GQ_COLS[sec].find(c => c.key === key);
+            if (gqSort[sec].key === key) gqSort[sec].dir = gqSort[sec].dir === 'asc' ? 'desc' : 'asc';
+            else gqSort[sec] = { key, dir: col.txt ? 'asc' : 'desc' };
+            gqOrdenar(sec);
+            secEl.querySelector('thead').innerHTML = gqThead(sec);
+            secEl.querySelector('tbody').innerHTML = gqTbody(sec);
+            secEl.querySelector('.gq-sec-hint').innerHTML = gqHint(sec);
+        });
+    });
 
     // Abas: clicar em "a comprar" / "em excesso" troca qual bloco aparece (sem rolar até o fim).
     back.querySelectorAll('.gq-tab').forEach(tab => {
