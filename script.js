@@ -196,7 +196,7 @@ if (ritmoViewSel) ritmoViewSel.addEventListener('change', () => {
     ritmoScExplicito = (ritmoView === 'sc');   // escolha explícita de SC passa a ignorar o filtro de CD
     updateRitmo();
 });
-if (ritmoSort) ritmoSort.addEventListener('change', updateRitmo);
+if (ritmoSort) ritmoSort.addEventListener('change', () => { ritmoHeadSort = { key: null, dir: 'desc' }; updateRitmo(); });
 const cdSalesSelectEl = document.getElementById('cdSalesSelect');
 if (cdSalesSelectEl) cdSalesSelectEl.addEventListener('change', renderVendasCDDetalhe);
 
@@ -342,6 +342,82 @@ document.getElementById('recommendationsContainer').addEventListener('change', (
     const inp = e.target.closest('.row-meta-input');
     if (inp && inp.dataset.recIdx !== undefined) onRecMetaChange(parseInt(inp.dataset.recIdx, 10), inp.value);
 });
+// ============================================
+// ORDENAÇÃO GENÉRICA (setinha ⇅ / ▲ / ▼) — Ritmo, Gargalo, modal de Curva, gráfico por CD
+// Mesma mecânica das tabelas Produtos/Sugestões/Detalhes: coluna nova começa em A→Z (texto)
+// ou maior→menor (número); clicar de novo inverte. Onde a ordem padrão não é uma coluna
+// (Ritmo, matriz do Gargalo), o 3º clique devolve a ordem padrão.
+// ============================================
+function ordSeta(ativo, dir) {
+    return ativo
+        ? `<span class="sort-arrow active">${dir === 'asc' ? '▲' : '▼'}</span>`
+        : '<span class="sort-arrow">⇅</span>';
+}
+function ordProximo(st, key, primeiro, volta) {
+    if (st.key !== key) return { key, dir: primeiro };
+    if (volta && st.dir !== primeiro) return { key: null, dir: primeiro };
+    return { key, dir: st.dir === 'asc' ? 'desc' : 'asc' };
+}
+// Compara dois valores; vazios (null / sem giro) ficam sempre no fim, em qualquer sentido.
+function ordCmp(va, vb, txt, dir) {
+    const vazio = v => v == null || v === '' || (typeof v === 'number' && !isFinite(v));
+    const na = vazio(va), nb = vazio(vb);
+    if (na || nb) return na === nb ? 0 : (na ? 1 : -1);
+    const c = txt
+        ? String(va).localeCompare(String(vb), 'pt-BR', { sensitivity: 'base', numeric: true })
+        : va - vb;
+    return dir === 'asc' ? c : -c;
+}
+
+// Ritmo: ordenação pelo cabeçalho da lista (sobrepõe o seletor "Ordenar por" enquanto ativa)
+let ritmoHeadSort = { key: null, dir: 'desc' };
+// Situação: do mais crítico ao mais folgado (mesma ordem das etiquetas da lista)
+function ritmoSitRank(r) {
+    if (r.estrutura === 'ruptura') return 0;
+    if (r.emReposicao) return 2;
+    if (r.veredito === 'acima') return 1;
+    if (r.veredito === 'abaixo') return 4;
+    return 3;
+}
+const RITMO_COLS = {
+    produto: { txt: true, primeiro: 'asc',  val: o => rotuloProduto(o.p) },
+    venda:   { primeiro: 'desc', val: o => Math.max(o.p.vendaMedia || 0, 0) },
+    cob:     { primeiro: 'desc', val: o => o.r.cobAtual },
+    sit:     { primeiro: 'asc',  val: o => ritmoSitRank(o.r) },   // ▲ = mais crítico primeiro
+    compra:  { primeiro: 'desc', val: o => o.compra }
+};
+const _ritmoCont = document.getElementById('ritmoContainer');
+if (_ritmoCont) _ritmoCont.addEventListener('click', e => {
+    const h = e.target.closest('.ritmo-rhead .sortable');
+    if (!h) return;
+    const k = h.dataset.sortKey;
+    ritmoHeadSort = ordProximo(ritmoHeadSort, k, RITMO_COLS[k].primeiro, true);
+    updateRitmo();
+});
+
+// Gargalo por CD: ordem dos CDs dentro de cada quadrante (padrão = índice de gargalo)
+let gqMatrizSort = { key: null, dir: 'desc' };
+const _gqBox = document.getElementById('gargaloContent');
+if (_gqBox) _gqBox.addEventListener('click', e => {
+    const h = e.target.closest('.gq-sort');
+    if (!h) return;
+    const k = h.dataset.sortKey;
+    gqMatrizSort = ordProximo(gqMatrizSort, k, k === 'cd' ? 'asc' : 'desc', true);
+    updateGargalo();
+});
+
+// Visão Geral: ordem das barras do gráfico "Média de Dias de Estoque por CD"
+let cdChartSort = { key: 'cd', dir: 'asc' };
+const _cdChartBox = document.getElementById('cdAverageChart');
+const _cdChartCard = _cdChartBox && _cdChartBox.closest('.chart-container');
+if (_cdChartCard) _cdChartCard.addEventListener('click', e => {
+    const b = e.target.closest('.ord-btn');
+    if (!b) return;
+    const k = b.dataset.sortKey;
+    cdChartSort = ordProximo(cdChartSort, k, k === 'cd' ? 'asc' : 'desc', false);
+    updateCharts();
+});
+
 // Ordenação por clique no cabeçalho da tabela de Sugestões
 document.getElementById('recommendationsContainer').addEventListener('click', (e) => {
     // Botão "Aplicar a todos" do campo de meta em massa
@@ -1511,7 +1587,23 @@ function updateCharts() {
         });
         const cdData = Object.entries(cdAgg)
             .map(([cd, v]) => ({ cd, diasMedios: v.venda > 0 ? (v.est / v.venda) * 30 : 0 }))
-            .sort((a, b) => a.cd.localeCompare(b.cd));
+            .sort((a, b) => cdChartSort.key === 'dias'
+                ? ordCmp(a.diasMedios, b.diasMedios, false, cdChartSort.dir) || a.cd.localeCompare(b.cd)
+                : ordCmp(a.cd, b.cd, true, cdChartSort.dir));
+        // Botões de ordenação ao lado do título do gráfico (criados uma vez)
+        let ordBar = cdChartCard && cdChartCard.querySelector('.ord-bar');
+        if (cdChartCard && !ordBar) {
+            ordBar = document.createElement('div');
+            ordBar.className = 'ord-bar';
+            cdChartCard.insertBefore(ordBar, document.getElementById('cdAverageChart'));
+        }
+        if (ordBar) {
+            const btn = (k, lbl) => {
+                const ativo = cdChartSort.key === k;
+                return `<button type="button" class="ord-btn sortable${ativo ? ' sort-active' : ''}" data-sort-key="${k}">${lbl} ${ordSeta(ativo, cdChartSort.dir)}</button>`;
+            };
+            ordBar.innerHTML = `<span class="ord-lbl">Ordenar</span>${btn('cd', 'CD')}${btn('dias', 'Dias')}`;
+        }
         // Média dos CDs COM giro (venda > 0). CDs sem venda mostram 0 e não entram na média,
         // pois "dias de estoque" não se define sem demanda.
         const comGiro = Object.values(cdAgg).filter(v => v.venda > 0);
@@ -1944,8 +2036,8 @@ function renderRecTable(lista, filter, hideCD) {
                     ${thOrdRec('estoque', 'Estoque', 'right')}
                     ${thOrdRec('pendencia', 'A caminho', 'right')}
                     ${thOrdRec('dias', 'Dias', 'right')}
-                    ${isExcesso ? '' : '<th style="text-align:center;">Meta<br><span style="font-weight:400;font-size:0.7rem;color:var(--text-secondary);">dias</span></th>'}
-                    ${isExcesso ? '<th style="text-align:right;">Parado</th>' : thOrdRec('sugestao', 'Comprar', 'right')}
+                    ${isExcesso ? '' : thOrdRec('meta', 'Meta<br><span style="font-weight:400;font-size:0.7rem;color:var(--text-secondary);">dias</span>', 'center')}
+                    ${isExcesso ? thOrdRec('parado', 'Parado', 'right') : thOrdRec('sugestao', 'Comprar', 'right')}
                 </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -2152,6 +2244,12 @@ function updateRitmo() {
     else if (foco === 'abaixo') lista.sort((a, b) => b.r.cobAtual - a.r.cobAtual);
     else if (foco === 'ritmo' || foco === 'reposicao') lista.sort((a, b) => a.r.cobAtual - b.r.cobAtual);
     else lista.sort((a, b) => (b.r.prioridade - a.r.prioridade) || (a.r.cobAtual - b.r.cobAtual));
+    // Clique no cabeçalho da lista tem precedência sobre o seletor enquanto estiver ativo.
+    if (ritmoHeadSort.key) {
+        const c = RITMO_COLS[ritmoHeadSort.key];
+        lista.sort((a, b) => ordCmp(c.val(a), c.val(b), c.txt, ritmoHeadSort.dir)
+            || rotuloProduto(a.p).localeCompare(rotuloProduto(b.p), 'pt-BR'));
+    }
 
     ritmoListaAtual = lista;
 
@@ -2306,13 +2404,17 @@ function renderRitmoTable(lista, hideCD, sc) {
     const base = sc
         ? 'Somado entre todos os CDs da Santa Cruz. Clique numa linha para a memória de cálculo.'
         : 'Cada linha é um produto num CD. Clique para a memória de cálculo.';
-    const dica = `${base} Venda/mês é o ritmo de saída; cobertura é esse estoque traduzido em dias.`;
+    const dica = `${base} Venda/mês é o ritmo de saída; cobertura é esse estoque traduzido em dias. Clique no cabeçalho para ordenar (3º clique volta à ordem do seletor).`;
+    const rh = (cls, key, label, title) => {
+        const ativo = ritmoHeadSort.key === key;
+        return `<span class="${cls} sortable${ativo ? ' sort-active' : ''}" data-sort-key="${key}" title="${title}">${label} ${ordSeta(ativo, ritmoHeadSort.dir)}</span>`;
+    };
     const head = `<div class="ritmo-rhead">
-            <span class="rh-name">Produto</span>
-            <span class="rh-venda">Venda/mês</span>
-            <span class="rh-cob">Cobertura</span>
-            <span class="rh-sit">Situação</span>
-            <span class="rh-buy">Comprar</span>
+            ${rh('rh-name', 'produto', 'Produto', 'Ordenar por nome')}
+            ${rh('rh-venda', 'venda', 'Venda/mês', 'Ordenar por venda média')}
+            ${rh('rh-cob', 'cob', 'Cobertura', 'Ordenar pela cobertura de hoje')}
+            ${rh('rh-sit', 'sit', 'Situação', 'Ordenar pela situação (▲ mais crítico primeiro)')}
+            ${rh('rh-buy', 'compra', 'Comprar', 'Ordenar pela sugestão de compra')}
             <span class="rh-exp"></span>
         </div>`;
     return `<div class="ritmo-dica">${dica}</div><div class="ritmo-list">${head}${rows}</div>`;
@@ -2602,6 +2704,7 @@ function valorOrdenacao(p, key) {
         case 'dias': return p.diasLivre;
         case 'meta': return getMetaDias(p);
         case 'sugestao': return memoriaCompra(p).comprar;
+        case 'parado': return p.estoqueLivre;
         default: return 0;
     }
 }
@@ -3276,6 +3379,21 @@ function abrirModalCurva(curvaLetra) {
     const totRS = lista.reduce((s, x) => s + x.rs, 0);
     const metaTxt = metaDiasGlobal;
 
+    // Ordenação pelo cabeçalho (padrão: maior R$ represado primeiro, a ordem de origem)
+    const CV_COLS = [
+        { key: 'prod', label: 'Produto',      cls: '',        txt: true },
+        { key: 'un',   label: 'Un a comprar', cls: 'cvm-num' },
+        { key: 'rs',   label: 'R$ represado', cls: 'cvm-num' },
+        { key: 'cob',  label: 'Cobertura',    cls: 'cvm-num' },
+        { key: 'pres', label: 'Presença',     cls: '' }
+    ];
+    let cvSort = { key: 'rs', dir: 'desc' };
+    const cvThead = () => `<tr><th class="cvm-rank">#</th>${CV_COLS.map(c => {
+        const ativo = cvSort.key === c.key;
+        const cls = ['sortable', c.cls, ativo ? 'sort-active' : ''].filter(Boolean).join(' ');
+        return `<th class="${cls}" data-sort-key="${c.key}" title="Ordenar por ${c.label}">${c.label} ${ordSeta(ativo, cvSort.dir)}</th>`;
+    }).join('')}</tr>`;
+
     const linhas = lista.map((s, i) => {
         const cob = s.vendaMedia > 0 ? `≈ ${Math.round(s.diasLivre).toLocaleString('pt-BR')} d` : 'sem giro';
         const cobCls = s.status === 'deficit' ? 'cvm-cob-def'
@@ -3285,8 +3403,12 @@ function abrirModalCurva(curvaLetra) {
             ? `${s.nCD} ${s.nCD === 1 ? 'CD' : 'CDs'} · <strong>${s.defCD} em déficit</strong>`
             : `${s.nCD} ${s.nCD === 1 ? 'CD' : 'CDs'}`;
 
-        const linha = `<tr class="cvm-row${expansivel ? ' cvm-expandable' : ''}"${expansivel ? ` data-i="${i}"` : ''}>
-            <td class="cvm-rank">${expansivel ? '<span class="cvm-caret">▸</span>' : ''}${i + 1}</td>
+        // data-s-*: valores de ordenação (o drill-down de CDs acompanha a linha do produto)
+        const presenca = s.nCD + s.defCD / 1000;
+        const linha = `<tr class="cvm-row${expansivel ? ' cvm-expandable' : ''}"${expansivel ? ` data-i="${i}"` : ''}
+            data-s-prod="${escapeHtml(s.produto)}" data-s-un="${s.un}" data-s-rs="${s.rs}"
+            data-s-cob="${s.vendaMedia > 0 ? s.diasLivre : ''}" data-s-pres="${presenca}">
+            <td class="cvm-rank">${expansivel ? '<span class="cvm-caret">▸</span>' : ''}<span class="cvm-rank-n">${i + 1}</span></td>
             <td class="cvm-prod">${escapeHtml(s.produto)}</td>
             <td class="cvm-un">${Math.round(s.un).toLocaleString('pt-BR')}</td>
             <td class="cvm-rs">${formatBRLCheio(s.rs)}</td>
@@ -3327,14 +3449,7 @@ function abrirModalCurva(curvaLetra) {
 
     const corpo = lista.length
         ? `<table class="cv-modal-table">
-                <thead><tr>
-                    <th class="cvm-rank">#</th>
-                    <th>Produto</th>
-                    <th class="cvm-num">Un a comprar</th>
-                    <th class="cvm-num">R$ represado</th>
-                    <th class="cvm-num">Cobertura</th>
-                    <th>Presença</th>
-                </tr></thead>
+                <thead>${cvThead()}</thead>
                 <tbody>${linhas}</tbody>
             </table>`
         : `<div class="cv-modal-vazio">Nenhum produto com recompra represada nesta curva${temFiltroGlobal() ? ' dentro do filtro atual' : ''}.</div>`;
@@ -3365,6 +3480,35 @@ function abrirModalCurva(curvaLetra) {
     back.addEventListener('click', e => { if (e.target === back) fecharModalCurva(); });
     back.querySelector('.cv-modal-x').addEventListener('click', fecharModalCurva);
     document.addEventListener('keydown', cvModalEsc);
+
+    // Ordenar: move cada produto junto com as suas linhas de CD (abertas ou não) e renumera o #.
+    const cvTable = back.querySelector('.cv-modal-table');
+    if (cvTable) cvTable.querySelector('thead').addEventListener('click', e => {
+        const th = e.target.closest('th.sortable');
+        if (!th) return;
+        const k = th.dataset.sortKey;
+        const col = CV_COLS.find(c => c.key === k);
+        cvSort = ordProximo(cvSort, k, col.txt ? 'asc' : 'desc', false);
+        const tbody = cvTable.querySelector('tbody');
+        const grupos = [];
+        [...tbody.children].forEach(tr => {
+            if (tr.classList.contains('cvm-sub') && grupos.length) grupos[grupos.length - 1].push(tr);
+            else grupos.push([tr]);
+        });
+        const val = tr => {
+            const v = tr.getAttribute('data-s-' + k);
+            if (col.txt) return v;
+            return v === '' || v == null ? null : parseFloat(v);
+        };
+        grupos.sort((a, b) => ordCmp(val(a[0]), val(b[0]), col.txt, cvSort.dir)
+            || ordCmp(a[0].getAttribute('data-s-prod'), b[0].getAttribute('data-s-prod'), true, 'asc'));
+        grupos.forEach((g, n) => {
+            g.forEach(tr => tbody.appendChild(tr));
+            const num = g[0].querySelector('.cvm-rank-n');
+            if (num) num.textContent = n + 1;
+        });
+        cvTable.querySelector('thead').innerHTML = cvThead();
+    });
 
     // Expandir/recolher os CDs em déficit de cada produto
     back.querySelectorAll('.cvm-row.cvm-expandable').forEach(row => {
@@ -3724,8 +3868,17 @@ function updateGargalo() {
         equilibrado: { lbl: 'Equilibrado', acao: 'sem dor relevante nos dois eixos' }
     };
 
+    const gqTh = (key, label, cls) => {
+        const ativo = gqMatrizSort.key === key;
+        return `<span class="gq-sort ${cls}${ativo ? ' sort-active' : ''}" data-sort-key="${key}" title="Ordenar os CDs (3º clique volta ao índice de gargalo)">${label} ${ordSeta(ativo, gqMatrizSort.dir)}</span>`;
+    };
     const celula = q => {
         const g = lista.filter(c => c.quad === q).sort((a, b) => b.idx - a.idx);
+        if (gqMatrizSort.key) {
+            const txt = gqMatrizSort.key === 'cd';
+            const v = c => gqMatrizSort.key === 'cd' ? c.cd : gqMatrizSort.key === 'def' ? c.defRS : c.travado;
+            g.sort((a, b) => ordCmp(v(a), v(b), txt, gqMatrizSort.dir) || b.idx - a.idx);
+        }
         const linhas = g.map(c => `
             <div class="gq-cd gq-cd-link" data-cd="${escapeHtml(c.cd)}" title="Ver produtos do CD ${escapeHtml(c.cd)}">
                 <span class="gq-cd-nome">${escapeHtml(c.cd)}</span>
@@ -3740,7 +3893,10 @@ function updateGargalo() {
                 <span class="gq-cell-cnt">${g.length}</span>
             </div>
             <div class="gq-cell-acao">${META[q].acao}</div>
-            ${g.length ? '<div class="gq-cell-cols"><span class="gq-cd-def">▲ déficit</span><span class="gq-cd-trv">■ excesso</span></div>' : ''}
+            ${g.length ? `<div class="gq-cell-cols">
+                ${gqTh('cd', 'CD', '')}
+                <span class="gq-cell-cols-nums">${gqTh('def', '▲ déficit', 'gq-cd-def')}${gqTh('trv', '■ excesso', 'gq-cd-trv')}</span>
+            </div>` : ''}
             <div class="gq-cell-body">${linhas}</div>
         </div>`;
     };
@@ -3760,7 +3916,7 @@ function updateGargalo() {
         <div class="gq-legenda">
             <span><span class="gq-tag-def">▲</span> déficit crítico a recomprar (itens &lt; 45 dias)</span>
             <span><span class="gq-tag-trv">■</span> excesso / capital travado (&gt; 100 dias)</span>
-            <span class="gq-legenda-corte">corte = mediana de cada eixo &middot; déficit ${formatBRLCheio(medDef)} &middot; travado ${formatBRLCheio(medTrv)} &middot; clique num CD para ver seus produtos</span>
+            <span class="gq-legenda-corte">corte = mediana de cada eixo &middot; déficit ${formatBRLCheio(medDef)} &middot; travado ${formatBRLCheio(medTrv)} &middot; clique num CD para ver seus produtos &middot; clique em CD / ▲ / ■ para ordenar</span>
         </div>
         <div class="gq-matriz">
             ${celula('comprar')}

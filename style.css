@@ -384,6 +384,30 @@ canvas {
 .products-table th.sortable:hover .sort-arrow { color: var(--primary); }
 .sort-arrow.active { color: var(--primary); }
 
+/* Ordenação: cabeçalho da lista do Ritmo */
+.ritmo-rhead .sortable { cursor: pointer; user-select: none; white-space: nowrap; transition: color 0.15s ease; }
+.ritmo-rhead .sortable:hover, .ritmo-rhead .sort-active { color: var(--primary); }
+.ritmo-rhead .sortable:hover .sort-arrow { color: var(--primary); }
+
+/* Ordenação: cabeçalho de cada quadrante da matriz do Gargalo */
+.gq-cell-cols { justify-content: space-between; }
+.gq-cell-cols-nums { display: flex; gap: 12px; }
+.gq-sort { cursor: pointer; user-select: none; transition: opacity 0.15s ease; }
+.gq-sort:not(.gq-cd-def):not(.gq-cd-trv) { color: var(--text-tertiary); }
+.gq-sort:hover { opacity: 0.75; }
+.gq-sort:hover .sort-arrow { color: var(--primary); }
+
+/* Ordenação: botões do gráfico "Média de Dias de Estoque por CD" */
+.ord-bar { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin: -0.9rem 0 0.9rem; }
+.ord-lbl { font-size: 0.72rem; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.03em; margin-right: 2px; }
+.ord-btn {
+    font: inherit; font-size: 0.78rem; font-weight: 600; color: var(--text-secondary);
+    background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 999px;
+    padding: 0.2rem 0.65rem; cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease;
+}
+.ord-btn:hover, .ord-btn.sort-active { color: var(--primary); border-color: var(--primary); }
+.ord-btn:hover .sort-arrow { color: var(--primary); }
+
 /* Cabeçalho ordenável no modal do Gargalo por CD */
 .cv-modal-table th.sortable { cursor: pointer; user-select: none; transition: color 0.15s ease; }
 .cv-modal-table th.sortable:hover,
