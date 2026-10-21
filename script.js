@@ -4664,7 +4664,7 @@ function renderAlvoParams() {
     if (!el) return;
     const dr = alvoDiasRestantes();
     el.innerHTML = `
-        <label>CD compra abaixo de
+        <label>Estoque saudável do CD
             <input type="number" id="alvoSaudavelInp" class="rec-bulk-input" min="7" max="180" step="1" value="${alvoSaudavel}" title="Estoque saudável da distribuidora: abaixo disso ela compra (padrão 45)"> dias
         </label>
         <label>Meta da força-tarefa
@@ -4694,45 +4694,60 @@ function renderAlvoParams() {
     el.querySelectorAll('input').forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') aplicar(); }));
 }
 
+// Força-tarefa: para cada ponto CD × produto, o que acontece se a equipe vender até o estoque
+// livre do CD chegar à META (padrão 30 d) até o fim do mês. Mostra a necessidade de compra hoje
+// (régua do CD, padrão 45 d — mesma conta da aba Sugestões) e a necessidade SE a equipe vender.
+// A diferença é o que a força-tarefa gera.
+function calcularForcaTarefa(p) {
+    const vm = p.vendaMedia || 0;
+    if (p.emFalta || vm <= 0 || p.status === 'parado' || vm < alvoGiroMin) return null;
+    const livre = p.estoqueLivre || 0;
+    const aCaminho = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
+    const estoqueMeta = vm * alvoMetaFT / 30;
+    if (livre <= estoqueMeta) return null;                    // já está na meta ou abaixo hoje
+    const mc = memoriaCompra(p, alvoSaudavel);
+    const normal = Math.max(0, mc.restoMes || 0);             // venda até o fim do mês no ritmo atual
+    const extra = Math.max(0, (livre - estoqueMeta) - normal);
+    const pct = normal > 0 ? extra / normal * 100 : (extra > 0 ? Infinity : 0);
+    if (pct > alvoTeto) return null;                          // esforço fora do alcance neste mês
+    // Necessidade SE a equipe vender: posição de fim de mês cai pelo extra vendido
+    const posFim = (mc.estoqueProjFim || 0) - extra;
+    const faltaSe = Math.max(0, vm * alvoSaudavel / 30 - posFim);
+    const mult = ajustarAoMultiplo(p, faltaSe);
+    let seUn = mult.ajustado;
+    if (faltaSe > 0 && mult.temMultiplo && seUn < mult.multiplo) seUn = mult.multiplo;
+    const hojeUn = mc.comprar || 0;
+    seUn = Math.max(seUn, hojeUn);                             // vender mais nunca reduz a necessidade
+    const pf = p.pf || 0;
+    return { p, vm, livre, aCaminho, dias: p.diasLivre || 0, normal, extra, pct,
+        hojeUn, hojeRS: hojeUn * pf, seUn, seRS: seUn * pf, ganhoRS: (seUn - hojeUn) * pf };
+}
+
 function updateAlvo() {
     const container = document.getElementById('alvoContainer');
     const kpisEl = document.getElementById('alvoKpis');
     if (!container) return;
     if (!dashboardData) { container.innerHTML = '<div class="empty-state">Carregue uma planilha para calcular os alvos de venda</div>'; return; }
     renderAlvoParams();
-
     let prods = originalProducts;
     if (filtroCD.size) prods = prods.filter(p => filtroCD.has(p.cd));
     if (filtroCurva.size) prods = prods.filter(p => filtroCurva.has(p.curva));
-    const calc = prods.map(calcularAlvo);
-    // VENDER A MAIS = quem cruza a régua até o fim do mês (só com a venda normal, 0 un a mais, ou
-    // com esforço dentro do teto). Aqui valem os filtros de esforço de campo: giro mínimo e sem
-    // média inflada (estoque real maior do que os dias da planilha indicam).
-    const vender = calc.filter(o => (o.classe === 'isca' || o.classe === 'sozinho') && !o.giroBaixo && !o.inflada)
-        .sort((a, b) => b.pedidoRS - a.pedidoRS);
-    // COBRAR PEDIDO = já abaixo da régua, nada a caminho, com compra > 0 pela conta da Sugestões.
-    // Sem filtro de giro ou de média: o comprador compra pelos números da planilha dele.
-    const cobrar = calc.filter(o => o.classe === 'radar' && o.pedidoUn > 0).sort((a, b) => b.pedidoRS - a.pedidoRS);
-    const soma = (l, k) => l.reduce((s, o) => s + o[k], 0);
-
-    if (kpisEl) kpisEl.innerHTML = `<div class="alvo-kpis">
-        <div class="alvo-kpi isca"><div class="alvo-kpi-val">${vender.length}</div><div class="alvo-kpi-lbl">produtos para <strong>vender a mais</strong> · ${Math.round(vender.reduce((s, o) => s + Math.max(0, o.extra), 0)).toLocaleString('pt-BR')} un extras · necessitará comprar ${formatBRLCheio(soma(vender, 'pedidoRS'))}</div></div>
-        <div class="alvo-kpi radar"><div class="alvo-kpi-val">${cobrar.length}</div><div class="alvo-kpi-lbl">produtos para <strong>cobrar pedido</strong> · necessita comprar ${formatBRLCheio(soma(cobrar, 'pedidoRS'))}</div></div>
-    </div>`;
-
-    const foco = (document.getElementById('alvoFilter') || {}).value || 'vender';
-    const lista = foco === 'cobrar' ? cobrar : vender;
+    const lista = prods.map(calcularForcaTarefa).filter(Boolean).sort((a, b) => b.seRS - a.seRS);
     alvoListaAtual = lista;
-    const intro = foco === 'cobrar'
-        ? `<div class="rec-intro"><strong>Cobrar pedido</strong>: já estão abaixo de ${alvoGatilho} dias. Onde não há nada a caminho, a distribuidora deveria estar comprando; onde já há, o pedido existente é insuficiente. <strong>Necessita Comprar</strong> = o que o CD ainda precisa comprar para fechar o mês com ${alvoGatilho} dias de estoque, em caixas inteiras.</div>`
-        : `<div class="rec-intro"><strong>Vender a mais</strong>: vendendo a quantidade indicada além do normal até o fim do mês, o estoque do CD fica abaixo de ${alvoGatilho} dias e ele passa a comprar. <strong>0 un</strong> = basta manter o ritmo normal. <strong>Necessitará Comprar</strong> = o que o CD vai precisar comprar quando isso acontecer.</div>`;
-    if (!lista.length) { container.innerHTML = intro + '<div class="empty-state">Nenhum produto nesta lista.</div>'; return; }
-    container.innerHTML = intro + renderAlvoTable(lista, filtroCD.size === 1, foco);
+    const soma = k => lista.reduce((s, o) => s + o[k], 0);
+    if (kpisEl) kpisEl.innerHTML = `<div class="alvo-kpis">
+        <div class="alvo-kpi isca"><div class="alvo-kpi-val">${lista.length}</div><div class="alvo-kpi-lbl">produtos na força-tarefa · vender ${Math.round(soma('extra')).toLocaleString('pt-BR')} un a mais até o fim do mês</div></div>
+        <div class="alvo-kpi fora"><div class="alvo-kpi-val">${formatBRLCheio(soma('hojeRS'))}</div><div class="alvo-kpi-lbl">necessidade de compra <strong>hoje</strong></div></div>
+        <div class="alvo-kpi pedido"><div class="alvo-kpi-val">${formatBRLCheio(soma('seRS'))}</div><div class="alvo-kpi-lbl">necessidade de compra <strong>se a equipe vender</strong> · +${formatBRLCheio(soma('ganhoRS'))}</div></div>
+    </div>`;
+    const intro = `<div class="rec-intro">Vendendo a quantidade indicada <strong>além do ritmo normal</strong> até o fim do mês, o estoque do CD cai para <strong>${alvoMetaFT} dias</strong>. A necessidade de compra é calculada para o CD voltar a <strong>${alvoSaudavel} dias</strong> (mesma conta da aba Sugestões, em caixas inteiras, já descontando o que está a caminho). <strong>0 un</strong> = chega a ${alvoMetaFT} dias só com a venda normal.</div>`;
+    if (!lista.length) { container.innerHTML = intro + '<div class="empty-state">Nenhum produto dentro dos critérios.</div>'; return; }
+    container.innerHTML = intro + renderAlvoTable(lista, filtroCD.size === 1);
 }
 
-function renderAlvoTable(lista, hideCD, foco) {
+function renderAlvoTable(lista, hideCD) {
     const r0 = n => Math.round(n).toLocaleString('pt-BR');
-    const vender = foco !== 'cobrar';
+    const sub = t => `<div style="font-size:0.72rem;color:var(--text-secondary);">${t}</div>`;
     const rows = lista.map((o, idx) => `
         <tr>
             <td>${idx + 1}</td>
@@ -4740,12 +4755,10 @@ function renderAlvoTable(lista, hideCD, foco) {
             <td title="${escapeHtml(rotuloProduto(o.p))}">${truncate(rotuloProduto(o.p), 40)}</td>
             <td><span class="curva-badge curva-${o.p.curva}">${o.p.curva}</span></td>
             <td style="text-align:right;">${Math.round(o.dias)} d</td>
-            ${vender ? `<td style="text-align:right;">${o.extra > 0 ? `<span class="alvo-extra">${r0(o.extra)} un</span>` : '<span class="alvo-extra zero">0 · manter ritmo</span>'}</td>`
-                     : `<td style="text-align:right;">${o.aCaminho > 0 ? `<span style="color:#0891b2;font-weight:600;">${r0(o.aCaminho)} un</span><div style="font-size:0.7rem;color:var(--text-secondary);">reforçar</div>` : '<span style="color:#cbd5e1;">—</span>'}</td>`}
-            ${vender ? '' : (() => { const v = vendaParaMetaFT(o);
-                return `<td style="text-align:right;">${v === null ? '<span style="color:var(--text-secondary);font-size:0.8rem;">já abaixo</span>'
-                    : v > 0 ? `<span class="alvo-extra">${r0(v)} un</span>` : '<span class="alvo-extra zero">0 · chega sozinho</span>'}</td>`; })()}
-            <td style="text-align:right;"><strong style="color:var(--primary);">${formatBRLCheio(o.pedidoRS)}</strong><div style="font-size:0.72rem;color:var(--text-secondary);">${r0(o.pedidoUn)} un</div></td>
+            <td style="text-align:right;">${o.aCaminho > 0 ? `<span style="color:#0891b2;font-weight:600;">${r0(o.aCaminho)}</span>` : '<span style="color:#cbd5e1;">—</span>'}</td>
+            <td style="text-align:right;">${o.extra > 0 ? `<span class="alvo-extra">${r0(o.extra)} un</span>` : '<span class="alvo-extra zero">0 · chega sozinho</span>'}</td>
+            <td style="text-align:right;">${o.hojeUn > 0 ? formatBRLCheio(o.hojeRS) + sub(r0(o.hojeUn) + ' un') : '<span style="color:#cbd5e1;">—</span>'}</td>
+            <td style="text-align:right;"><strong style="color:var(--primary);">${formatBRLCheio(o.seRS)}</strong>${sub(r0(o.seUn) + ' un')}</td>
         </tr>`).join('');
     const th = (l, al, t) => `<th style="text-align:${al};"${t ? ` title="${t}"` : ''}>${l}</th>`;
     return `
@@ -4757,9 +4770,10 @@ function renderAlvoTable(lista, hideCD, foco) {
                 ${th('Produto', 'left')}
                 ${th('Curva', 'left')}
                 ${th('Estoque hoje', 'right', 'Dias de estoque livre hoje')}
-                ${vender ? th('Vender a mais até o fim do mês', 'right', 'Unidades além da venda normal para o estoque ficar abaixo da régua') : th('Já a caminho', 'right', 'Pedido já existente (trânsito + entrega). Quando há, Necessita Comprar é o reforço que ainda falta.')}
-                ${vender ? '' : th(`Vender a mais p/ ${alvoMetaFT} d`, 'right', `Unidades além da venda normal, até o fim do mês, para o estoque livre do CD chegar a ${alvoMetaFT} dias. Se houver algo a caminho, a entrega repõe o estoque.`)}
-                ${th(vender ? 'Necessitará Comprar' : 'Necessita Comprar', 'right', vender ? 'O que o CD vai precisar comprar quando o estoque cair abaixo da régua (caixas inteiras, a preço de fábrica)' : 'O que o CD precisa comprar para fechar o mês com estoque saudável (caixas inteiras, a preço de fábrica)')}
+                ${th('Já a caminho', 'right', 'Trânsito + entrega (un)')}
+                ${th(`Vender a mais p/ ${alvoMetaFT} d`, 'right', `Unidades além da venda normal, até o fim do mês, para o estoque livre do CD chegar a ${alvoMetaFT} dias`)}
+                ${th('Necessita comprar hoje', 'right', `Compra para fechar o mês com ${alvoSaudavel} dias, sem esforço extra`)}
+                ${th('Necessitará comprar se vender', 'right', `Compra para voltar a ${alvoSaudavel} dias se a equipe vender a quantidade indicada`)}
             </tr></thead>
             <tbody>${rows}</tbody>
         </table>
@@ -4768,33 +4782,24 @@ function renderAlvoTable(lista, hideCD, foco) {
 
 function exportarAlvoExcel() {
     if (!alvoListaAtual.length) { alert('Nenhum produto em tela para exportar.'); return; }
-    const foco = (document.getElementById('alvoFilter') || {}).value || 'vender';
-    const vender = foco !== 'cobrar';
     const limpa = v => String(v == null ? '' : v).replace(/\.0$/, '').trim();
     const FMT_INT = '#,##0', FMT_BRL = 'R$ #,##0.00';
-    const linhas = alvoListaAtual.map(o => {
-        const l = { 'CD': o.p.cd, 'Material': o.p.material, 'SAP': limpa(o.p.codigoSAP), 'Curva': o.p.curva, 'Estoque Hoje (dias)': Math.round(o.dias) };
-        if (vender) l['Vender a Mais até o Fim do Mês (un)'] = Math.round(Math.max(0, o.extra));
-        else {
-            l['Já a Caminho (un)'] = Math.round(o.aCaminho);
-            const v = vendaParaMetaFT(o);
-            l[`Vender a Mais p/ ${alvoMetaFT} dias (un)`] = v === null ? 'já abaixo' : Math.round(v);
-        }
-        const rot = vender ? 'Necessitará Comprar' : 'Necessita Comprar';
-        l[rot + ' (un)'] = Math.round(o.pedidoUn);
-        l[rot + ' (R$ PF)'] = +o.pedidoRS.toFixed(2);
-        return l;
-    });
+    const linhas = alvoListaAtual.map(o => ({
+        'CD': o.p.cd, 'Material': o.p.material, 'SAP': limpa(o.p.codigoSAP), 'Curva': o.p.curva,
+        'Estoque Hoje (dias)': Math.round(o.dias), 'Já a Caminho (un)': Math.round(o.aCaminho),
+        [`Vender a Mais p/ ${alvoMetaFT} dias (un)`]: Math.round(o.extra),
+        'Necessita Comprar Hoje (un)': Math.round(o.hojeUn), 'Necessita Comprar Hoje (R$ PF)': +o.hojeRS.toFixed(2),
+        'Necessitará Comprar se Vender (un)': Math.round(o.seUn), 'Necessitará Comprar se Vender (R$ PF)': +o.seRS.toFixed(2)
+    }));
     const ws = XLSX.utils.json_to_sheet(linhas);
     const n = Object.keys(linhas[0]).length, col = XLSX.utils.encode_col;
-    ws['!cols'] = (vender ? [8, 40, 10, 7, 14, 22, 14, 18] : [8, 40, 10, 7, 14, 14, 18, 14, 18]).map(w => ({ wch: w }));
+    ws['!cols'] = [8, 40, 10, 7, 12, 12, 16, 14, 16, 16, 18].map(w => ({ wch: w }));
     ws['!autofilter'] = { ref: `A1:${col(n - 1)}${linhas.length + 1}` };
-    ws['!rows'] = [{ hpt: 30 }];
+    ws['!rows'] = [{ hpt: 32 }];
     for (let c = 0; c < n; c++) { const cel = ws[col(c) + '1']; if (cel) cel.s = (c <= 1) ? XLS_HEADER_LEFT : XLS_HEADER; }
-    const est = [xlsEstiloTexto('left'), xlsEstiloTexto('left', true), xlsEstiloTexto('center'), null, xlsEstiloNum(FMT_INT),
-        { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } }];
-    if (!vender) est.push({ ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } });
-    est.push(xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } });
+    const azul = { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } };
+    const est = [xlsEstiloTexto('left'), xlsEstiloTexto('left', true), xlsEstiloTexto('center'), null, xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT),
+        azul, xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_BRL), xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } }];
     alvoListaAtual.forEach((o, i) => {
         const r = i + 2;
         est.forEach((s, c) => { const cel = ws[col(c) + r]; if (cel && s) cel.s = s; });
@@ -4802,10 +4807,10 @@ function exportarAlvoExcel() {
         const sap = ws[col(2) + r]; if (sap) { sap.t = 's'; sap.v = String(sap.v); sap.z = '@'; }
     });
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, vender ? 'Vender a mais' : 'Cobrar pedido');
+    XLSX.utils.book_append_sheet(wb, ws, 'Força-tarefa');
     const ref = String(dashboardData.dataReferencia || '').replace(/\//g, '-');
     const cdTxt = filtroCD.size === 1 ? [...filtroCD][0].replace(/[^\w-]/g, '') : 'TodosCDs';
-    baixarExcelComCongelamento(wb, `${vender ? 'Vender_a_mais' : 'Cobrar_pedido'}_${cdTxt}_abaixo${alvoGatilho}d_${ref || 'export'}.xlsx`, 'C2');
+    baixarExcelComCongelamento(wb, `Forca_Tarefa_${cdTxt}_meta${alvoMetaFT}d_${ref || 'export'}.xlsx`, 'C2');
 }
 
 // Listeners dos seletores da aba
@@ -5103,7 +5108,7 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-const SCRIPT_VERSAO = '2026-10-21l';
+const SCRIPT_VERSAO = '2026-10-21m';
 console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
 
 // ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html
