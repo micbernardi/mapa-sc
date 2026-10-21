@@ -222,10 +222,11 @@ const MS_FILTROS = {
     prodCd:   { set: filtroCD,     toggle: 'msProdCdToggle',   drop: 'msProdCdDrop',   opts: 'msProdCdOpts',   vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
     recCd:    { set: filtroCD,     toggle: 'msRecCdToggle',    drop: 'msRecCdDrop',    opts: 'msRecCdOpts',    vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
     ritmoCd:  { set: filtroCD,     toggle: 'msRitmoCdToggle',  drop: 'msRitmoCdDrop',  opts: 'msRitmoCdOpts',  vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: ritmoCdChange },
+    alvoCd:   { set: filtroCD,     toggle: 'msAlvoCdToggle',   drop: 'msAlvoCdDrop',   opts: 'msAlvoCdOpts',   vazio: 'Todos os CDs',    rotulo: v => 'CD: ' + v,              plural: n => n + ' CDs',    onChange: aplicarTudo },
     globalCurva: { set: filtroCurva, toggle: 'msGlobalCurvaToggle', drop: 'msGlobalCurvaDrop', opts: 'msGlobalCurvaOpts', vazio: 'Todas as Curvas', rotulo: v => 'Curva ' + v, plural: n => n + ' curvas', onChange: aplicarTudo },
     status:   { set: filtroStatus, toggle: 'msStatusToggle',   drop: 'msStatusDrop',   opts: 'msStatusOpts',   vazio: 'Todos',           rotulo: v => MS_STATUS_LABEL[v] || v, plural: n => n + ' status', onChange: aplicarTudo }
 };
-const MS_CD_KEYS = ['cd', 'prodCd', 'recCd', 'ritmoCd'];
+const MS_CD_KEYS = ['cd', 'prodCd', 'recCd', 'ritmoCd', 'alvoCd'];
 const MS_CURVA_KEYS = ['curva', 'recCurva', 'ritmoCurva', 'mapaCurva'];
 
 // Aplica e sincroniza TUDO quando qualquer filtro global muda
@@ -238,6 +239,7 @@ function aplicarTudo() {
     updateRitmo();           // Ritmo Entrada × Saída
     updateCockpit();         // Cockpit
     updateGargalo();         // Gargalo por CD
+    updateAlvo();            // Alvo de Venda
 }
 
 // Marcar um CD específico no seletor do Ritmo descarta a intenção de "ver SC":
@@ -1345,6 +1347,10 @@ function clearDashboard() {
     if (ritmoCont) ritmoCont.innerHTML = '<div class="empty-state">Carregue uma planilha para analisar o ritmo entrada × saída</div>';
     const ritmoKpisEl = document.getElementById('ritmoKpis');
     if (ritmoKpisEl) ritmoKpisEl.innerHTML = '';
+    const alvoCont = document.getElementById('alvoContainer');
+    if (alvoCont) alvoCont.innerHTML = '<div class="empty-state">Carregue uma planilha para calcular os alvos de venda</div>';
+    ['alvoKpis', 'alvoParams'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+    alvoListaAtual = [];
     document.getElementById('cdAverageChart').innerHTML = '';
 
     ['kpiEstoqueTotal', 'kpiExcesso', 'kpiSemGiro', 'kpiCds'].forEach(id => {
@@ -1355,7 +1361,7 @@ function clearDashboard() {
     filtroCD.clear();
     filtroCurva.clear();
     filtroStatus.clear();
-    ['cd', 'prodCd', 'recCd', 'ritmoCd'].forEach(q => msMontaOpcoes(q, []));
+    MS_CD_KEYS.forEach(q => msMontaOpcoes(q, []));
     msSincroniza('globalCurva'); msSincroniza('status');
     productSearch.value = '';
     // Detalhes
@@ -1396,7 +1402,7 @@ function populateFilters() {
     // Descarta seleções de CDs que sumiram na nova base.
     [...filtroCD].forEach(v => { if (!cds.includes(v)) filtroCD.delete(v); });
     const opcoesCd = cds.map(cd => ({ value: cd, label: cd }));
-    ['cd', 'prodCd', 'recCd', 'ritmoCd'].forEach(q => msMontaOpcoes(q, opcoesCd));
+    MS_CD_KEYS.forEach(q => msMontaOpcoes(q, opcoesCd));
 
     // Detalhes: monta as opções de CD e Produto (multi-seleção)
     detailCDs.clear();
@@ -1488,6 +1494,7 @@ function updateAllVisualizations() {
     updateRitmo();
     updateCockpit();
     updateGargalo();
+    updateAlvo();
 }
 
 function updateViewHint() {
@@ -4533,6 +4540,271 @@ function updateMudancas() {
     `;
 }
 
+
+// ============================================
+// ALVO DE VENDA — força-tarefa / isca de compra
+// ------------------------------------------------------------
+// A distribuidora só compra quando o radar dela acusa cobertura abaixo de um GATILHO (suposição
+// padrão: 30 dias de estoque livre). Esta aba inverte a pergunta das demais: em vez de "quanto o
+// CD precisa comprar", pergunta "quanto a equipe precisa VENDER até o fim do mês (a cota é por mês
+// de calendário) para o estoque do CD cair ao gatilho e a compra ser disparada".
+//   gatilho (un)        = venda média × gatilho/30            (estoque em que o CD passa a comprar)
+//   precisa sair        = estoque livre − gatilho (un)
+//   venda normal        = saída que ainda resta no mês = projeção do mês − já vendido
+//                         (mesma projeção da aba Sugestões: coluna PROJEÇÃO, dias úteis)
+//   esforço extra       = precisa sair − venda normal        (un e % sobre a venda normal)
+//   pedido estimado     = venda média × (meta de cobertura − gatilho)/30 × PF
+//                         (quando o radar dispara, o CD repõe do gatilho até a meta da aba Sugestões)
+// A "beira" se move com o calendário: no dia 19 a venda normal consome ~12 dias de estoque, então
+// quem está até ~42 dias cai ao gatilho sozinho; no dia 1º, até ~60 dias. Por isso nada aqui usa um
+// corte fixo em dias — tudo é recalculado a partir dos dias restantes da base.
+// ============================================
+const ALVO_GATILHO_PADRAO = 30;    // dias de estoque em que a distribuidora passa a comprar (suposição)
+const ALVO_TETO_PADRAO = 50;       // esforço extra máximo (% sobre a venda normal) para ser "isca"
+let alvoGatilho = ALVO_GATILHO_PADRAO;
+let alvoTeto = ALVO_TETO_PADRAO;
+let alvoListaAtual = [];
+
+// Dias que faltam para o fim do mês da base (ex.: base 19/10 → 12 dias até 31/10)
+function alvoDiasRestantes() {
+    const dc = (dashboardData && dashboardData.diasCorridos) || 0;
+    const dm = (DATA_BASE instanceof Date && !isNaN(DATA_BASE))
+        ? new Date(DATA_BASE.getFullYear(), DATA_BASE.getMonth() + 1, 0).getDate() : 30;
+    return Math.max(0, dm - dc);
+}
+
+// Racional de um ponto (CD × produto). Devolve classe + números para a tabela e a memória.
+function calcularAlvo(p) {
+    const vm = p.vendaMedia || 0;
+    const livre = p.estoqueLivre || 0;
+    const aCaminho = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
+    const dias = p.diasLivre || 0;
+    const base = { p, vm, livre, aCaminho, dias, gatilhoUn: 0, precisaSair: 0, normal: 0, extra: 0, pct: null,
+        estoqueFim: 0, diasFim: 0, pedidoUn: 0, pedidoRS: 0, prio: 0, classe: 'excluido', motivo: '' };
+    if (p.emFalta) { base.motivo = 'em falta na Supera'; return base; }
+    if (vm <= 0) { base.motivo = 'sem venda média'; return base; }
+    if (p.status === 'parado') { base.motivo = 'parado (sem giro recente)'; return base; }
+    if (aCaminho > 0) { base.motivo = 'já tem reposição a caminho (' + aCaminho.toLocaleString('pt-BR') + ' un) — a entrega anula o esforço'; return base; }
+    base.gatilhoUn = vm * alvoGatilho / 30;
+    if (Math.round(dias) <= alvoGatilho) { base.motivo = 'já está no radar da distribuidora (' + Math.round(dias) + ' d ≤ ' + alvoGatilho + ' d)'; return base; }
+    const mc = memoriaCompra(p);
+    base.normal = Math.max(0, mc.restoMes || 0);
+    base.precisaSair = Math.max(0, livre - base.gatilhoUn);
+    base.extra = base.precisaSair - base.normal;
+    base.pct = base.normal > 0 ? (base.extra / base.normal) * 100 : (base.extra > 0 ? Infinity : 0);
+    base.estoqueFim = livre - base.normal;
+    base.diasFim = (base.estoqueFim / vm) * 30;
+    base.pedidoUn = Math.max(0, vm * (getMetaDias(p) - alvoGatilho) / 30);
+    base.pedidoRS = base.pedidoUn * (p.pf || 0);
+    if (base.extra <= 0) base.classe = 'sozinho';
+    else if (base.pct <= alvoTeto) base.classe = 'isca';
+    else base.classe = 'fora';
+    // prioridade: valor do pedido gerado por unidade de esforço (esforço mínimo 5% p/ não explodir)
+    base.prio = base.pedidoRS / Math.max(base.pct, 5);
+    return base;
+}
+
+const ALVO_LABEL = { isca: 'Isca', sozinho: 'Cai sozinho', fora: 'Fora de alcance', excluido: 'Excluído' };
+
+function renderAlvoParams() {
+    const el = document.getElementById('alvoParams');
+    if (!el) return;
+    const dr = alvoDiasRestantes();
+    el.innerHTML = `
+        <label>Gatilho da distribuidora
+            <input type="number" id="alvoGatilhoInp" class="rec-bulk-input" min="7" max="120" step="1" value="${alvoGatilho}" title="Dias de estoque em que a distribuidora passa a comprar (suposição; padrão 30)"> dias
+        </label>
+        <label>Teto de esforço extra
+            <input type="number" id="alvoTetoInp" class="rec-bulk-input" min="0" max="500" step="5" value="${alvoTeto}" title="Esforço extra máximo (% sobre a venda normal) para o item contar como isca"> %
+        </label>
+        <button type="button" class="rec-bulk-btn" id="alvoAplicarBtn">Aplicar</button>
+        <span class="alvo-info">Base ${escapeHtml((dashboardData && dashboardData.dataReferencia) || '')} · faltam <strong>${dr} dias</strong> para o fim do mês · pedido estimado considera reposição do gatilho até a meta de ${metaDiasGlobal} dias (aba Sugestões)</span>`;
+    const aplicar = () => {
+        const g = parseInt(document.getElementById('alvoGatilhoInp').value, 10);
+        const t = parseInt(document.getElementById('alvoTetoInp').value, 10);
+        alvoGatilho = isNaN(g) ? ALVO_GATILHO_PADRAO : Math.max(7, Math.min(120, g));
+        alvoTeto = isNaN(t) ? ALVO_TETO_PADRAO : Math.max(0, Math.min(500, t));
+        updateAlvo();
+    };
+    el.querySelector('#alvoAplicarBtn').addEventListener('click', aplicar);
+    el.querySelectorAll('input').forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') aplicar(); }));
+}
+
+function updateAlvo() {
+    const container = document.getElementById('alvoContainer');
+    const kpisEl = document.getElementById('alvoKpis');
+    if (!container) return;
+    if (!dashboardData) { container.innerHTML = '<div class="empty-state">Carregue uma planilha para calcular os alvos de venda</div>'; return; }
+    renderAlvoParams();
+
+    let prods = originalProducts;
+    if (filtroCD.size) prods = prods.filter(p => filtroCD.has(p.cd));
+    if (filtroCurva.size) prods = prods.filter(p => filtroCurva.has(p.curva));
+    const todos = prods.map(calcularAlvo).filter(o => o.classe !== 'excluido');
+
+    const isca = todos.filter(o => o.classe === 'isca');
+    const sozinho = todos.filter(o => o.classe === 'sozinho');
+    const fora = todos.filter(o => o.classe === 'fora');
+    const pedidoIsca = isca.reduce((s, o) => s + o.pedidoRS, 0);
+    const pedidoSozinho = sozinho.reduce((s, o) => s + o.pedidoRS, 0);
+    if (kpisEl) kpisEl.innerHTML = `<div class="alvo-kpis">
+        <div class="alvo-kpi isca"><div class="alvo-kpi-val">${isca.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">iscas · esforço extra até ${alvoTeto}%</div></div>
+        <div class="alvo-kpi pedido"><div class="alvo-kpi-val">${formatBRLCheio(pedidoIsca)}</div><div class="alvo-kpi-lbl">pedidos que as iscas geram (PF)</div></div>
+        <div class="alvo-kpi sozinho"><div class="alvo-kpi-val">${sozinho.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">caem ao gatilho sozinhos · ${formatBRLCheio(pedidoSozinho)} em pedidos</div></div>
+        <div class="alvo-kpi fora"><div class="alvo-kpi-val">${fora.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">fora de alcance neste mês</div></div>
+    </div>`;
+
+    const foco = (document.getElementById('alvoFilter') || {}).value || 'isca';
+    let lista = foco === 'isca' ? isca : foco === 'sozinho' ? sozinho : foco === 'fora' ? fora : todos;
+    const ordem = (document.getElementById('alvoSort') || {}).value || 'prio';
+    const nome = o => rotuloProduto(o.p);
+    lista = lista.slice().sort((a, b) => {
+        if (ordem === 'pedido') return (b.pedidoRS - a.pedidoRS) || nome(a).localeCompare(nome(b), 'pt-BR');
+        if (ordem === 'esforco') return (a.pct - b.pct) || nome(a).localeCompare(nome(b), 'pt-BR');
+        if (ordem === 'dias') return (a.dias - b.dias) || nome(a).localeCompare(nome(b), 'pt-BR');
+        if (ordem === 'nome') return nome(a).localeCompare(nome(b), 'pt-BR') || a.p.cd.localeCompare(b.p.cd);
+        return (b.prio - a.prio) || nome(a).localeCompare(nome(b), 'pt-BR');
+    });
+    alvoListaAtual = lista;
+
+    const escopo = filtroCD.size === 0 ? 'todos os CDs' : (filtroCD.size === 1 ? `CD ${[...filtroCD][0]}` : `${filtroCD.size} CDs`);
+    const introMap = {
+        isca: `<strong>Iscas</strong>: produtos acima do gatilho de ${alvoGatilho} dias que chegam a ele até o fim do mês com um esforço extra de venda de até ${alvoTeto}% sobre o ritmo normal. É a lista para a força-tarefa: vender o "extra" cria a necessidade de compra no CD.`,
+        sozinho: `<strong>Caem sozinhos</strong>: no ritmo normal de venda já chegam ao gatilho até o fim do mês. Não precisam de esforço extra — só garantir que a venda normal aconteça.`,
+        fora: `<strong>Fora de alcance</strong>: precisariam de esforço acima de ${alvoTeto}% para chegar ao gatilho neste mês. Candidatos para o mês que vem, quando a beira sobe.`,
+        todos: 'Todos os produtos acima do gatilho, com a classificação de cada um.'
+    };
+    const excl = prods.length - todos.length;
+    const intro = `<div class="rec-intro">${introMap[foco]}<br><strong>${lista.length} itens</strong> em ${escopo} · fora da conta: ${excl} (já no radar, com reposição a caminho, parados, em falta ou sem venda)</div>`;
+    if (!lista.length) { container.innerHTML = intro + '<div class="empty-state">Nenhum produto neste critério.</div>'; return; }
+    container.innerHTML = intro + renderAlvoTable(lista, filtroCD.size === 1);
+}
+
+function renderAlvoTable(lista, hideCD) {
+    const r0 = n => Math.round(n).toLocaleString('pt-BR');
+    const rows = lista.map((o, idx) => {
+        const p = o.p;
+        const pctTxt = !isFinite(o.pct) ? '∞' : (o.pct <= 0 ? '0%' : '+' + Math.round(o.pct) + '%');
+        const extraCls = o.classe === 'sozinho' ? 'zero' : (o.classe === 'fora' ? 'alto' : '');
+        return `
+        <tr class="rec-row" onclick="toggleAlvoDetail(${idx})">
+            <td>${idx + 1}</td>
+            ${hideCD ? '' : `<td><strong>${escapeHtml(p.cd)}</strong></td>`}
+            <td title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 34)} <span class="rec-expand" id="alvoexp-${idx}">▸</span></td>
+            <td><span class="curva-badge curva-${p.curva}">${p.curva}</span></td>
+            <td style="text-align:right;">${r0(o.vm)}</td>
+            <td style="text-align:right;">${r0(o.livre)}</td>
+            <td style="text-align:right;"><span class="status-badge ${statusGrupo(p.status)}" style="padding:0.2rem 0.5rem;">${Math.round(o.dias)}</span></td>
+            <td style="text-align:right;">${r0(o.gatilhoUn)}</td>
+            <td style="text-align:right;">${r0(o.precisaSair)}</td>
+            <td style="text-align:right;">${r0(o.normal)}</td>
+            <td style="text-align:right;"><span class="alvo-extra ${extraCls}">${o.extra > 0 ? r0(o.extra) : '0'}</span><div style="font-size:0.72rem;color:var(--text-secondary);">${pctTxt}</div></td>
+            <td style="text-align:right;">${Math.round(o.diasFim)} d</td>
+            <td style="text-align:right;"><strong style="color:var(--primary);">${formatBRLCheio(o.pedidoRS)}</strong><div style="font-size:0.72rem;color:var(--text-secondary);">${r0(o.pedidoUn)} un</div></td>
+            <td><span class="status-badge ${o.classe}">${ALVO_LABEL[o.classe]}</span></td>
+        </tr>
+        <tr class="rec-detail-row" id="alvodet-${idx}" style="display:none;">
+            <td colspan="${hideCD ? 13 : 14}">${explicacaoAlvo(o)}</td>
+        </tr>`;
+    }).join('');
+    const th = (l, al, title) => `<th style="text-align:${al};"${title ? ` title="${title}"` : ''}>${l}</th>`;
+    return `
+    <div class="rec-table-hint">Clique numa linha para ver a conta. <strong>Precisa sair</strong> = estoque hoje − estoque do gatilho. <strong>Venda normal</strong> = o que ainda sai até o fim do mês no ritmo atual. <strong>Extra</strong> = o que a equipe precisa vender além do normal. <strong>Pedido</strong> = compra estimada que o CD faz ao chegar no gatilho.</div>
+    <div class="table-container">
+        <table class="products-table rec-table">
+            <thead><tr>
+                <th>#</th>
+                ${hideCD ? '' : th('CD', 'left')}
+                ${th('Produto', 'left')}
+                ${th('Curva', 'left')}
+                ${th('Venda/mês', 'right', 'Venda média ponderada (un/mês)')}
+                ${th('Estoque', 'right', 'Estoque livre hoje (un)')}
+                ${th('Dias', 'right', 'Cobertura hoje')}
+                ${th('Gatilho (un)', 'right', 'Estoque em que a distribuidora passa a comprar = venda média × gatilho/30')}
+                ${th('Precisa sair', 'right', 'Estoque hoje − gatilho (un)')}
+                ${th('Venda normal', 'right', 'Saída prevista até o fim do mês no ritmo atual (projeção − já vendido)')}
+                ${th('Extra', 'right', 'Venda além do normal necessária até o fim do mês (un e % sobre a venda normal)')}
+                ${th('Fim do mês', 'right', 'Cobertura prevista em dias no fim do mês, sem esforço extra')}
+                ${th('Pedido', 'right', 'Compra estimada ao disparar o gatilho (do gatilho até a meta), a PF')}
+                ${th('Situação', 'left')}
+            </tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+    </div>`;
+}
+
+function explicacaoAlvo(o) {
+    const p = o.p, r = n => Math.round(n).toLocaleString('pt-BR');
+    const dr = alvoDiasRestantes();
+    const pctTxt = !isFinite(o.pct) ? 'sem venda prevista no mês' : (o.pct <= 0 ? 'nenhum esforço extra' : `+${Math.round(o.pct)}% sobre a venda normal`);
+    let veredito;
+    if (o.classe === 'sozinho') veredito = `<strong style="color:var(--saudavel);">Cai sozinho.</strong> No ritmo normal o estoque chega a ${r(o.estoqueFim)} un (${Math.round(o.diasFim)} d) no fim do mês — já abaixo do gatilho. Só não deixar a venda cair.`;
+    else if (o.classe === 'isca') veredito = `<strong style="color:#0e7490;">Isca.</strong> Vendendo <strong>${r(o.extra)} un a mais</strong> que o normal até o fim do mês (${pctTxt}), o estoque cai a ${r(o.gatilhoUn)} un = ${alvoGatilho} dias e o CD passa a comprar. Pedido esperado: ${r(o.pedidoUn)} un · ${formatBRLCheio(o.pedidoRS)}.`;
+    else veredito = `<strong style="color:var(--text-secondary);">Fora de alcance neste mês.</strong> Precisaria de ${r(o.extra)} un extras (${pctTxt}), acima do teto de ${alvoTeto}%. No mês que vem a beira sobe e ele pode voltar à lista.`;
+    return `
+    <div class="rec-memoria">
+        <div class="rec-memoria-vendas"><span class="rec-memoria-label">Vendas por mês (un):</span>${vendasPorMesHtml(p)}</div>
+        <div class="rec-memoria-calc">
+            <span class="rec-memoria-label">A conta:</span>
+            Estoque hoje <strong>${r(o.livre)} un</strong> = ${Math.round(o.dias)} dias (venda média ${r(o.vm)} un/mês).
+            Gatilho de ${alvoGatilho} dias = ${r(o.vm)} × ${alvoGatilho}/30 = <strong>${r(o.gatilhoUn)} un</strong>.
+            Precisa sair até o fim do mês: ${r(o.livre)} − ${r(o.gatilhoUn)} = <strong>${r(o.precisaSair)} un</strong>.
+            Venda normal nos ${dr} dias restantes (projeção ${r(p.vendaParcialProjetada)} − já vendido ${r(p.vendaParcial)}) = <strong>${r(o.normal)} un</strong>.
+            Esforço extra = ${r(o.precisaSair)} − ${r(o.normal)} = <strong>${o.extra > 0 ? r(o.extra) : '0'} un</strong> (${pctTxt}).
+            <br>${veredito}
+        </div>
+    </div>`;
+}
+
+window.toggleAlvoDetail = function (idx) {
+    const row = document.getElementById('alvodet-' + idx);
+    const arrow = document.getElementById('alvoexp-' + idx);
+    if (!row) return;
+    const aberto = row.style.display !== 'none';
+    row.style.display = aberto ? 'none' : 'table-row';
+    if (arrow) arrow.textContent = aberto ? '▸' : '▾';
+};
+
+// Exportação da aba Alvo de Venda: exatamente as linhas em tela, na mesma ordem.
+function exportarAlvoExcel() {
+    if (!alvoListaAtual.length) { alert('Nenhum alvo em tela para exportar.'); return; }
+    const limpa = v => String(v == null ? '' : v).replace(/\.0$/, '').trim();
+    const FMT_INT = '#,##0', FMT_BRL = 'R$ #,##0.00', FMT_PCT = '0"%"';
+    const linhas = alvoListaAtual.map(o => ({
+        'CD': o.p.cd, 'Material': o.p.material, 'SAP': limpa(o.p.codigoSAP), 'EAN': limpa(o.p.ean), 'Curva': o.p.curva,
+        'Situação': ALVO_LABEL[o.classe],
+        'Venda Média (un/mês)': Math.round(o.vm), 'Estoque Livre (un)': Math.round(o.livre), 'Dias Estoque Hoje': Math.round(o.dias),
+        'Gatilho (dias)': alvoGatilho, 'Gatilho (un)': Math.round(o.gatilhoUn),
+        'Precisa Sair (un)': Math.round(o.precisaSair), 'Venda Normal até Fim do Mês (un)': Math.round(o.normal),
+        'Esforço Extra (un)': Math.round(Math.max(0, o.extra)), 'Esforço Extra (%)': isFinite(o.pct) ? Math.round(Math.max(0, o.pct)) : 999,
+        'Dias no Fim do Mês': Math.round(o.diasFim),
+        'Pedido Estimado (un)': Math.round(o.pedidoUn), 'Pedido Estimado (R$ PF)': +o.pedidoRS.toFixed(2)
+    }));
+    const ws = XLSX.utils.json_to_sheet(linhas);
+    const n = Object.keys(linhas[0]).length, col = XLSX.utils.encode_col;
+    ws['!cols'] = [8, 38, 10, 16, 6, 14, 14, 14, 12, 10, 12, 14, 18, 14, 12, 12, 14, 18].map(w => ({ wch: w }));
+    ws['!autofilter'] = { ref: `A1:${col(n - 1)}${linhas.length + 1}` };
+    ws['!rows'] = [{ hpt: 30 }];
+    for (let c = 0; c < n; c++) { const cel = ws[col(c) + '1']; if (cel) cel.s = (c <= 1) ? XLS_HEADER_LEFT : XLS_HEADER; }
+    const est = [xlsEstiloTexto('left'), xlsEstiloTexto('left', true), xlsEstiloTexto('center'), xlsEstiloTexto('center'), null, xlsEstiloTexto('center', true),
+        xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT),
+        { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } }, xlsEstiloNum(FMT_PCT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } }];
+    alvoListaAtual.forEach((o, i) => {
+        const r = i + 2;
+        est.forEach((s, c) => { const cel = ws[col(c) + r]; if (cel && s) cel.s = s; });
+        const cv = ws[col(4) + r]; if (cv) cv.s = xlsEstiloCurva(o.p.curva);
+        [2, 3].forEach(c => { const cel = ws[col(c) + r]; if (cel) { cel.t = 's'; cel.v = String(cel.v); cel.z = '@'; } });
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Alvo de Venda');
+    const ref = String(dashboardData.dataReferencia || '').replace(/\//g, '-');
+    const cdTxt = filtroCD.size === 1 ? [...filtroCD][0].replace(/[^\w-]/g, '') : 'TodosCDs';
+    baixarExcelComCongelamento(wb, `Alvo_Venda_${cdTxt}_gatilho${alvoGatilho}d_${ref || 'export'}.xlsx`, 'C2');
+}
+
+// Listeners dos seletores da aba
+['alvoFilter', 'alvoSort'].forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('change', updateAlvo); });
+
 function handleTabClick(e) {
     const tab = e.target.getAttribute('data-tab');
     tabButtons.forEach(b => b.classList.remove('active'));
@@ -4541,6 +4813,7 @@ function handleTabClick(e) {
     document.getElementById(tab).classList.add('active');
     if (tab === 'cd-sales') renderVendasCD();
     if (tab === 'ritmo') updateRitmo();
+    if (tab === 'alvo') updateAlvo();
     if (tab === 'cockpit') updateCockpit();
     if (tab === 'gargalo') updateGargalo();
     if (tab === 'mudancas') updateMudancas();
@@ -4579,6 +4852,7 @@ function statusGrupo(status) {
 function produtosEmTela() {
     const tab = document.querySelector('.tab-content.active')?.id || 'overview';
     if (tab === 'recommendations') return { lista: recListaAtual, contexto: 'Sugestoes' };
+    if (tab === 'alvo') return { lista: alvoListaAtual.map(o => o.p), contexto: 'AlvoVenda' };
     if (tab === 'details') return { lista: detailPontosAtuais, contexto: 'Detalhes' };
     // overview / products / cd-analysis: base filtrada pelos filtros de CD/Curva/Status/Busca
     const base = (allProducts.length > 0 || isFilterActive()) ? allProducts : baseAtual();
@@ -4648,6 +4922,7 @@ function exportarExcel() {
     }
 
     const { lista, contexto } = produtosEmTela();
+    if (contexto === 'AlvoVenda') { exportarAlvoExcel(); return; }
     if (!lista || lista.length === 0) {
         alert('Não há linhas em tela para exportar com os filtros atuais.');
         return;
@@ -4822,7 +5097,7 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-const SCRIPT_VERSAO = '2026-10-21';
+const SCRIPT_VERSAO = '2026-10-21b';
 console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
 
 // ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html

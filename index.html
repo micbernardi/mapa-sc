@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=2026-10-21">
+    <link rel="stylesheet" href="style.css?v=2026-10-21b">
 </head>
 <body>
     <div class="container">
@@ -41,6 +41,7 @@
                 <button class="tab-btn" data-tab="overview">📈 Visão Geral</button>
                 <button class="tab-btn" data-tab="products">📦 Produtos</button>
                 <button class="tab-btn" data-tab="recommendations" title="Quanto comprar para cada produto atingir 45 dias de cobertura de estoque, já descontando o que vem a caminho (meta padrão, ajustável por linha)">💡 Sugestões de Compra (45 dias)</button>
+                <button class="tab-btn" data-tab="alvo" title="Força-tarefa de venda: quanto cada produto precisa vender até o fim do mês para o estoque do CD cair ao gatilho de compra da distribuidora.">🎣 Alvo de Venda</button>
                 <button class="tab-btn" data-tab="ritmo" title="Entrada (estoque livre + reposição a caminho) versus saída (demanda que vocês geram). Diz se a demanda está acima, no ritmo ou abaixo do estoque.">⚖️ Ritmo Entrada × Saída</button>
                 <button class="tab-btn" data-tab="gargalo" title="CDs onde déficit crítico (ruptura) e capital travado (>100d) convivem — onde agir nos dois sentidos ao mesmo tempo.">🚧 Gargalo por CD</button>
                 <button class="tab-btn" data-tab="details">🔍 Detalhes</button>
@@ -208,6 +209,44 @@
             </section>
 
             <!-- TAB: RITMO ENTRADA × SAÍDA -->
+            <section class="tab-content" id="alvo">
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label>Selecionar CD:</label>
+                        <div class="multiselect" id="msAlvoCd">
+                            <button type="button" class="ms-toggle" id="msAlvoCdToggle">Todos os CDs <span class="ms-arrow">▾</span></button>
+                            <div class="ms-dropdown" id="msAlvoCdDrop">
+                                <div class="ms-options" id="msAlvoCdOpts"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="filter-group">
+                        <label>Mostrar:</label>
+                        <select id="alvoFilter" class="filter-select">
+                            <option value="isca" selected>Iscas (esforço dentro do teto)</option>
+                            <option value="sozinho">Caem sozinhos (só manter a venda)</option>
+                            <option value="fora">Fora de alcance (esforço acima do teto)</option>
+                            <option value="todos">Tudo o que está acima do gatilho</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Ordenar por:</label>
+                        <select id="alvoSort" class="filter-select">
+                            <option value="prio" selected>Prioridade (R$ do pedido ÷ esforço)</option>
+                            <option value="pedido">Maior pedido gerado (R$)</option>
+                            <option value="esforco">Menor esforço extra (%)</option>
+                            <option value="dias">Menor cobertura hoje</option>
+                            <option value="nome">Nome (A → Z)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="alvo-params" id="alvoParams"></div>
+                <div class="ritmo-kpis" id="alvoKpis"></div>
+                <div class="recommendations-container" id="alvoContainer">
+                    <div class="empty-state">Carregue uma planilha para calcular os alvos de venda</div>
+                </div>
+            </section>
+
             <section class="tab-content" id="ritmo">
                 <div class="filters-row">
                     <div class="filter-group">
@@ -315,6 +354,6 @@
     </div>
 
     <script src="xlsx.full.min.js"></script>
-    <script src="script.js?v=2026-10-21"></script>
+    <script src="script.js?v=2026-10-21b"></script>
 </body>
 </html>

@@ -2269,3 +2269,32 @@ canvas {
     .cv-modal-table thead th, .cv-modal-table tbody td { padding-left: 1rem; padding-right: 1rem; }
     .cv-modal-table th:nth-child(6), .cv-modal-table td.cvm-cd { display: none; }
 }
+
+
+/* ============================================
+   ABA ALVO DE VENDA (força-tarefa / isca de compra)
+   ============================================ */
+.alvo-params {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1.1rem;
+    background: var(--bg-card); border: 1px solid var(--border-strong); border-left: 4px solid #0891b2;
+    padding: 0.55rem 0.9rem; border-radius: var(--radius-sm); margin-bottom: 1rem; box-shadow: var(--shadow);
+}
+.alvo-params label { font-size: 0.85rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.4rem; }
+.alvo-params .rec-bulk-input { color: #0891b2; }
+.alvo-params .rec-bulk-btn { background: #0891b2; }
+.alvo-params .rec-bulk-btn:hover { background: #0e7490; }
+.alvo-params .alvo-info { font-size: 0.78rem; color: var(--text-secondary); margin-left: auto; }
+.alvo-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+.alvo-kpi { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.7rem 0.9rem; box-shadow: var(--shadow); }
+.alvo-kpi-val { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; }
+.alvo-kpi-lbl { font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.15rem; }
+.alvo-kpi.isca .alvo-kpi-val { color: #0891b2; }
+.alvo-kpi.sozinho .alvo-kpi-val { color: var(--saudavel); }
+.alvo-kpi.fora .alvo-kpi-val { color: var(--text-secondary); }
+.alvo-kpi.pedido .alvo-kpi-val { color: var(--primary); }
+.status-badge.isca { background: #cffafe; color: #0e7490; }
+.status-badge.sozinho { background: #dcfce7; color: #15803d; }
+.status-badge.fora { background: #f1f5f9; color: #64748b; }
+.alvo-extra { font-weight: 800; color: #0e7490; }
+.alvo-extra.zero { color: var(--saudavel); }
+.alvo-extra.alto { color: var(--text-secondary); }
