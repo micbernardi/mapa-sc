@@ -2301,3 +2301,5 @@ canvas {
 
 .status-badge.radar { background: #fef3c7; color: #b45309; }
 .alvo-kpi.radar .alvo-kpi-val { color: #b45309; }
+
+.alvo-inflada { font-size: 0.7rem; font-weight: 700; color: #b45309; margin-top: 0.1rem; }

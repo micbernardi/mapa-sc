@@ -4553,14 +4553,23 @@ function updateMudancas() {
 //   venda normal        = saída que ainda resta no mês = projeção do mês − já vendido
 //                         (mesma projeção da aba Sugestões: coluna PROJEÇÃO, dias úteis)
 //   esforço extra       = precisa sair − venda normal        (un e % sobre a venda normal)
-//   pedido estimado     = venda média × (meta de cobertura − gatilho)/30 × PF
-//                         (quando o radar dispara, o CD repõe do gatilho até a meta da aba Sugestões)
+//   pedido estimado     = venda média × (estoque saudável do CD − cobertura no fim do mês)/30 × PF
+//                         (o CD repõe até o saudável; para iscas, a cobertura do fim do mês = gatilho)
+//   média inflada       = venda média dos 2 últimos meses fechados < 75% da média ponderada
+//                         (sazonal/queda: a régua superestima o giro e o esforço real é maior)
 // A "beira" se move com o calendário: no dia 19 a venda normal consome ~12 dias de estoque, então
 // quem está até ~42 dias cai ao gatilho sozinho; no dia 1º, até ~60 dias. Por isso nada aqui usa um
 // corte fixo em dias — tudo é recalculado a partir dos dias restantes da base.
 // ============================================
-const ALVO_GATILHO_PADRAO = 30;    // dias de estoque em que a distribuidora passa a comprar (suposição)
+// Régua única: abaixo do ESTOQUE SAUDÁVEL (padrão 45 dias) o CD compra. A força-tarefa quer levar o
+// estoque do CD para baixo dessa linha até o fim do mês. "Gatilho" e "saudável" são o mesmo número.
+const ALVO_GATILHO_PADRAO = 45;
 const ALVO_TETO_PADRAO = 50;       // esforço extra máximo (% sobre a venda normal) para ser "isca"
+const ALVO_SAUDAVEL_PADRAO = 45;   // cobertura que o CD considera saudável: ao comprar, repõe até aqui
+const ALVO_INFLADA = 0.75;
+const ALVO_GIRO_MIN_PADRAO = 100;  // venda média mínima (un/mês) para entrar na força-tarefa
+let alvoGiroMin = ALVO_GIRO_MIN_PADRAO;         // venda dos 2 últimos meses fechados < 75% da média → média inflada
+let alvoSaudavel = ALVO_SAUDAVEL_PADRAO;
 let alvoGatilho = ALVO_GATILHO_PADRAO;
 let alvoTeto = ALVO_TETO_PADRAO;
 let alvoListaAtual = [];
@@ -4584,11 +4593,22 @@ function calcularAlvo(p) {
     if (p.emFalta) { base.motivo = 'em falta na Supera'; return base; }
     if (vm <= 0) { base.motivo = 'sem venda média'; return base; }
     if (p.status === 'parado') { base.motivo = 'parado (sem giro recente)'; return base; }
+    // Giro baixo: vende pouco demais para justificar esforço de campo (vale para todas as situações).
+    if (vm < alvoGiroMin) { base.classe = 'giro-baixo'; base.motivo = 'giro abaixo de ' + alvoGiroMin + ' un/mês'; return base; }
     if (aCaminho > 0) { base.motivo = 'já tem reposição a caminho (' + aCaminho.toLocaleString('pt-BR') + ' un) — a entrega anula o esforço'; return base; }
     base.gatilhoUn = vm * alvoGatilho / 30;
     const mc = memoriaCompra(p);
-    base.pedidoUn = Math.max(0, vm * (getMetaDias(p) - alvoGatilho) / 30);
-    base.pedidoRS = base.pedidoUn * (p.pf || 0);
+    // Média inflada: os 2 últimos meses FECHADOS vendem bem menos que a média ponderada
+    const v = p.vendas || [0, 0, 0, 0, 0];
+    base.recente = (Math.max(0, v[2]) + Math.max(0, v[3])) / 2;
+    base.inflada = base.recente < vm * ALVO_INFLADA;
+    base.diasReal = base.recente > 0 ? (livre / base.recente) * 30 : Infinity;
+    // Pedido = o que o CD compra para voltar ao estoque saudável a partir da cobertura em que fica
+    // no fim do mês (no radar/cai sozinho: a natural; isca/fora: o gatilho, se o esforço acontecer).
+    const pedidoDe = diasFimConsiderado => {
+        base.pedidoUn = Math.max(0, vm * (alvoSaudavel - diasFimConsiderado) / 30);
+        base.pedidoRS = base.pedidoUn * (p.pf || 0);
+    };
     // JÁ NO RADAR: estoque de hoje já está no gatilho ou abaixo. Não some da lista — vira caso de
     // COBRANÇA à distribuidora (pela premissa do gatilho, ela já deveria estar comprando).
     // Assim, ao subir o gatilho, o item avança de situação (fora → isca → cai sozinho → no radar)
@@ -4599,6 +4619,7 @@ function calcularAlvo(p) {
         base.estoqueFim = livre - base.normal;
         base.diasFim = (base.estoqueFim / vm) * 30;
         base.pct = 0;
+        pedidoDe(Math.max(0, Math.min(base.diasFim, alvoGatilho)));
         base.prio = base.pedidoRS / 5;
         return base;
     }
@@ -4611,8 +4632,15 @@ function calcularAlvo(p) {
     if (base.extra <= 0) base.classe = 'sozinho';
     else if (base.pct <= alvoTeto) base.classe = 'isca';
     else base.classe = 'fora';
+    if (base.classe === 'sozinho') pedidoDe(Math.max(0, Math.min(base.diasFim, alvoGatilho)));
+    else {
+        // Isca / fora: o CD mantém 45 dias, então compra o que vende. Cada unidade vendida ALÉM do
+        // normal, depois de cruzar a linha, ele precisa repor: pedido incremental ≈ venda extra (1:1).
+        base.pedidoUn = Math.max(0, base.extra);
+        base.pedidoRS = base.pedidoUn * (p.pf || 0);
+    }
     // prioridade: valor do pedido gerado por unidade de esforço (esforço mínimo 5% p/ não explodir)
-    base.prio = base.pedidoRS / Math.max(base.pct, 5);
+    base.prio = (base.classe === 'sozinho' ? base.pedidoRS : base.vm * (p.pf || 0)) / Math.max(base.pct, 5);
     return base;
 }
 
@@ -4624,18 +4652,24 @@ function renderAlvoParams() {
     if (!el) return;
     const dr = alvoDiasRestantes();
     el.innerHTML = `
-        <label>Gatilho da distribuidora
-            <input type="number" id="alvoGatilhoInp" class="rec-bulk-input" min="7" max="120" step="1" value="${alvoGatilho}" title="Dias de estoque em que a distribuidora passa a comprar (suposição; padrão 30)"> dias
+        <label>CD compra abaixo de
+            <input type="number" id="alvoSaudavelInp" class="rec-bulk-input" min="7" max="180" step="1" value="${alvoSaudavel}" title="Estoque saudável da distribuidora: abaixo disso ela compra (padrão 45)"> dias
+        </label>
+        <label>Giro mínimo
+            <input type="number" id="alvoGiroInp" class="rec-bulk-input" min="0" max="100000" step="10" value="${alvoGiroMin}" title="Venda média mínima (un/mês) para o item entrar na força-tarefa (padrão 100)"> un/mês
         </label>
         <label>Teto de esforço extra
             <input type="number" id="alvoTetoInp" class="rec-bulk-input" min="0" max="500" step="5" value="${alvoTeto}" title="Esforço extra máximo (% sobre a venda normal) para o item contar como isca"> %
         </label>
         <button type="button" class="rec-bulk-btn" id="alvoAplicarBtn">Aplicar</button>
-        <span class="alvo-info">Base ${escapeHtml((dashboardData && dashboardData.dataReferencia) || '')} · faltam <strong>${dr} dias</strong> para o fim do mês · pedido estimado considera reposição do gatilho até a meta de ${metaDiasGlobal} dias (aba Sugestões)</span>`;
+        <span class="alvo-info">Base ${escapeHtml((dashboardData && dashboardData.dataReferencia) || '')} · faltam <strong>${dr} dias</strong> para o fim do mês · objetivo: estoque do CD abaixo de ${alvoSaudavel} dias em 31/${String(((DATA_BASE && DATA_BASE.getMonth()) || 0) + 1).padStart(2, '0')}</span>`;
     const aplicar = () => {
-        const g = parseInt(document.getElementById('alvoGatilhoInp').value, 10);
         const t = parseInt(document.getElementById('alvoTetoInp').value, 10);
-        alvoGatilho = isNaN(g) ? ALVO_GATILHO_PADRAO : Math.max(7, Math.min(120, g));
+        const sv = parseInt(document.getElementById('alvoSaudavelInp').value, 10);
+        alvoSaudavel = isNaN(sv) ? ALVO_SAUDAVEL_PADRAO : Math.max(7, Math.min(180, sv));
+        alvoGatilho = alvoSaudavel;   // régua única
+        const gm = parseInt(document.getElementById('alvoGiroInp').value, 10);
+        alvoGiroMin = isNaN(gm) ? ALVO_GIRO_MIN_PADRAO : Math.max(0, gm);
         alvoTeto = isNaN(t) ? ALVO_TETO_PADRAO : Math.max(0, Math.min(500, t));
         updateAlvo();
     };
@@ -4653,7 +4687,9 @@ function updateAlvo() {
     let prods = originalProducts;
     if (filtroCD.size) prods = prods.filter(p => filtroCD.has(p.cd));
     if (filtroCurva.size) prods = prods.filter(p => filtroCurva.has(p.curva));
-    const todos = prods.map(calcularAlvo).filter(o => o.classe !== 'excluido');
+    const calc = prods.map(calcularAlvo);
+    const nGiroBaixo = calc.filter(o => o.classe === 'giro-baixo').length;
+    const todos = calc.filter(o => o.classe !== 'excluido' && o.classe !== 'giro-baixo');
 
     const radar = todos.filter(o => o.classe === 'radar');
     const isca = todos.filter(o => o.classe === 'isca');
@@ -4663,7 +4699,7 @@ function updateAlvo() {
     const pedidoSozinho = sozinho.reduce((s, o) => s + o.pedidoRS, 0);
     if (kpisEl) kpisEl.innerHTML = `<div class="alvo-kpis">
         <div class="alvo-kpi isca"><div class="alvo-kpi-val">${isca.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">iscas · esforço extra até ${alvoTeto}%</div></div>
-        <div class="alvo-kpi pedido"><div class="alvo-kpi-val">${formatBRLCheio(pedidoIsca)}</div><div class="alvo-kpi-lbl">pedidos que as iscas geram (PF)</div></div>
+        <div class="alvo-kpi pedido"><div class="alvo-kpi-val">${formatBRLCheio(pedidoIsca)}</div><div class="alvo-kpi-lbl">venda extra das iscas (PF) = pedido incremental</div></div>
         <div class="alvo-kpi sozinho"><div class="alvo-kpi-val">${sozinho.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">caem ao gatilho sozinhos · ${formatBRLCheio(pedidoSozinho)} em pedidos</div></div>
         <div class="alvo-kpi fora"><div class="alvo-kpi-val">${fora.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">fora de alcance neste mês</div></div>
         <div class="alvo-kpi radar"><div class="alvo-kpi-val">${radar.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">no radar sem pedido · ${formatBRLCheio(radar.reduce((s, o) => s + o.pedidoRS, 0))} a cobrar</div></div>
@@ -4685,14 +4721,14 @@ function updateAlvo() {
 
     const escopo = filtroCD.size === 0 ? 'todos os CDs' : (filtroCD.size === 1 ? `CD ${[...filtroCD][0]}` : `${filtroCD.size} CDs`);
     const introMap = {
-        isca: `<strong>Iscas</strong>: produtos acima do gatilho de ${alvoGatilho} dias que chegam a ele até o fim do mês com um esforço extra de venda de até ${alvoTeto}% sobre o ritmo normal. É a lista para a força-tarefa: vender o "extra" cria a necessidade de compra no CD.`,
-        sozinho: `<strong>Caem sozinhos</strong>: no ritmo normal de venda já chegam ao gatilho até o fim do mês. Não precisam de esforço extra — só garantir que a venda normal aconteça.`,
-        fora: `<strong>Fora de alcance</strong>: precisariam de esforço acima de ${alvoTeto}% para chegar ao gatilho neste mês. Candidatos para o mês que vem, quando a beira sobe.`,
-        radar: `<strong>No radar sem pedido</strong>: estoque de hoje já está no gatilho de ${alvoGatilho} dias ou abaixo, sem nada a caminho. Pela premissa do gatilho, a distribuidora já deveria estar comprando — é caso de <strong>cobrar o pedido</strong> do comprador, não de esforço de venda.`,
+        isca: `<strong>Iscas</strong>: hoje acima de ${alvoGatilho} dias e, no ritmo normal, terminariam o mês ainda acima. Com uma venda extra de até ${alvoTeto}% sobre o normal, ficam abaixo de ${alvoGatilho} dias em 31/10 e o CD passa a comprar. É a lista da força-tarefa. A partir daí, cada unidade vendida a mais o CD precisa repor.`,
+        sozinho: `<strong>Caem sozinhos</strong>: no ritmo normal de venda já terminam o mês abaixo de ${alvoGatilho} dias. Não precisam de esforço extra — só garantir que a venda normal aconteça.`,
+        fora: `<strong>Fora de alcance</strong>: precisariam de venda extra acima de ${alvoTeto}% para ficar abaixo de ${alvoGatilho} dias neste mês. Candidatos para o mês que vem.`,
+        radar: `<strong>No radar sem pedido</strong>: já estão abaixo de ${alvoGatilho} dias hoje e sem nada a caminho. A distribuidora já deveria estar comprando — é caso de <strong>cobrar o pedido</strong> do comprador, não de esforço de venda.`,
         todos: 'Todos os produtos com giro e sem reposição a caminho, do mais próximo da compra ao mais distante: no radar → cai sozinho → isca → fora de alcance.'
     };
-    const excl = prods.length - todos.length;
-    const intro = `<div class="rec-intro">${introMap[foco]}<br><strong>${lista.length} itens</strong> em ${escopo} · fora da conta: ${excl} (com reposição a caminho, parados, em falta ou sem venda)</div>`;
+    const excl = prods.length - todos.length - nGiroBaixo;
+    const intro = `<div class="rec-intro">${introMap[foco]}<br><strong>${lista.length} itens</strong> em ${escopo} · fora da conta: ${nGiroBaixo} com giro abaixo de ${alvoGiroMin} un/mês e ${excl} com reposição a caminho, parados, em falta ou sem venda</div>`;
     if (!lista.length) { container.innerHTML = intro + '<div class="empty-state">Nenhum produto neste critério.</div>'; return; }
     container.innerHTML = intro + renderAlvoTable(lista, filtroCD.size === 1);
 }
@@ -4707,7 +4743,7 @@ function renderAlvoTable(lista, hideCD) {
         <tr class="rec-row" onclick="toggleAlvoDetail(${idx})">
             <td>${idx + 1}</td>
             ${hideCD ? '' : `<td><strong>${escapeHtml(p.cd)}</strong></td>`}
-            <td title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 34)} <span class="rec-expand" id="alvoexp-${idx}">▸</span></td>
+            <td title="${escapeHtml(rotuloProduto(p))}">${truncate(rotuloProduto(p), 34)} <span class="rec-expand" id="alvoexp-${idx}">▸</span>${o.inflada ? `<div class="alvo-inflada" title="Os 2 últimos meses fechados venderam em média ${r0(o.recente)} un/mês, abaixo de 75% da média ponderada (${r0(o.vm)}). A régua superestima o giro: no ritmo recente o estoque dura ~${isFinite(o.diasReal) ? Math.round(o.diasReal) : '∞'} dias.">⚠ média inflada · ritmo recente ${r0(o.recente)}/mês</div>` : ''}</td>
             <td><span class="curva-badge curva-${p.curva}">${p.curva}</span></td>
             <td style="text-align:right;">${r0(o.vm)}</td>
             <td style="text-align:right;">${r0(o.livre)}</td>
@@ -4726,7 +4762,7 @@ function renderAlvoTable(lista, hideCD) {
     }).join('');
     const th = (l, al, title) => `<th style="text-align:${al};"${title ? ` title="${title}"` : ''}>${l}</th>`;
     return `
-    <div class="rec-table-hint">Clique numa linha para ver a conta. <strong>Precisa sair</strong> = estoque hoje − estoque do gatilho. <strong>Venda normal</strong> = o que ainda sai até o fim do mês no ritmo atual. <strong>Extra</strong> = o que a equipe precisa vender além do normal. <strong>Pedido</strong> = compra estimada que o CD faz ao chegar no gatilho.</div>
+    <div class="rec-table-hint">Clique numa linha para ver a conta. <strong>Linha de compra</strong> = estoque de ${alvoGatilho} dias em unidades. <strong>Precisa sair</strong> = estoque hoje − linha. <strong>Venda normal</strong> = o que ainda sai até o fim do mês no ritmo atual. <strong>Extra</strong> = o que a equipe precisa vender além do normal. <strong>Pedido</strong> = reposição até ${alvoGatilho} dias (no radar / cai sozinho) ou a própria venda extra, que o CD repõe 1:1 (isca / fora).</div>
     <div class="table-container">
         <table class="products-table rec-table">
             <thead><tr>
@@ -4737,8 +4773,8 @@ function renderAlvoTable(lista, hideCD) {
                 ${th('Venda/mês', 'right', 'Venda média ponderada (un/mês)')}
                 ${th('Estoque', 'right', 'Estoque livre hoje (un)')}
                 ${th('Dias', 'right', 'Cobertura hoje')}
-                ${th('Gatilho (un)', 'right', 'Estoque em que a distribuidora passa a comprar = venda média × gatilho/30')}
-                ${th('Precisa sair', 'right', 'Estoque hoje − gatilho (un)')}
+                ${th('Linha de compra', 'right', 'Estoque abaixo do qual o CD compra = venda média × dias/30')}
+                ${th('Precisa sair', 'right', 'Estoque hoje − linha de compra (un)')}
                 ${th('Venda normal', 'right', 'Saída prevista até o fim do mês no ritmo atual (projeção − já vendido)')}
                 ${th('Extra', 'right', 'Venda além do normal necessária até o fim do mês (un e % sobre a venda normal)')}
                 ${th('Fim do mês', 'right', 'Cobertura prevista em dias no fim do mês, sem esforço extra')}
@@ -4762,26 +4798,27 @@ function explicacaoAlvo(o) {
         <div class="rec-memoria-calc">
             <span class="rec-memoria-label">A conta:</span>
             Estoque hoje <strong>${r(o.livre)} un</strong> = ${Math.round(o.dias)} dias (venda média ${r(o.vm)} un/mês).
-            Gatilho de ${alvoGatilho} dias = ${r(o.vm)} × ${alvoGatilho}/30 = <strong>${r(o.gatilhoUn)} un</strong>.
-            O estoque <strong>já está no gatilho ou abaixo</strong> e não há nada a caminho.
-            <br><strong style="color:#b45309;">No radar sem pedido.</strong> Pela premissa do gatilho, o CD já deveria estar comprando. Ação: cobrar o pedido da distribuidora — esperado ${r(o.pedidoUn)} un · ${formatBRLCheio(o.pedidoRS)}.
+            Linha de compra (${alvoGatilho} dias) = ${r(o.vm)} × ${alvoGatilho}/30 = <strong>${r(o.gatilhoUn)} un</strong>.
+            O estoque <strong>já está abaixo da linha</strong> e não há nada a caminho.
+            <br><strong style="color:#b45309;">No radar sem pedido.</strong> O CD já deveria estar comprando. Ação: cobrar o pedido da distribuidora — reposição até ${alvoGatilho} dias no fim do mês ≈ ${r(o.pedidoUn)} un · ${formatBRLCheio(o.pedidoRS)}.
         </div>
     </div>`;
     }
-    if (o.classe === 'sozinho') veredito = `<strong style="color:var(--saudavel);">Cai sozinho.</strong> No ritmo normal o estoque chega a ${r(o.estoqueFim)} un (${Math.round(o.diasFim)} d) no fim do mês — já abaixo do gatilho. Só não deixar a venda cair.`;
-    else if (o.classe === 'isca') veredito = `<strong style="color:#0e7490;">Isca.</strong> Vendendo <strong>${r(o.extra)} un a mais</strong> que o normal até o fim do mês (${pctTxt}), o estoque cai a ${r(o.gatilhoUn)} un = ${alvoGatilho} dias e o CD passa a comprar. Pedido esperado: ${r(o.pedidoUn)} un · ${formatBRLCheio(o.pedidoRS)}.`;
-    else veredito = `<strong style="color:var(--text-secondary);">Fora de alcance neste mês.</strong> Precisaria de ${r(o.extra)} un extras (${pctTxt}), acima do teto de ${alvoTeto}%. No mês que vem a beira sobe e ele pode voltar à lista.`;
+    if (o.classe === 'sozinho') veredito = `<strong style="color:var(--saudavel);">Cai sozinho.</strong> No ritmo normal o estoque chega a ${r(o.estoqueFim)} un (${Math.round(o.diasFim)} d) no fim do mês — abaixo de ${alvoGatilho} dias. Só não deixar a venda cair. Reposição esperada até ${alvoGatilho} d: ${r(o.pedidoUn)} un · ${formatBRLCheio(o.pedidoRS)}.`;
+    else if (o.classe === 'isca') veredito = `<strong style="color:#0e7490;">Isca.</strong> Vendendo <strong>${r(o.extra)} un a mais</strong> que o normal até o fim do mês (${pctTxt}), o estoque fica abaixo de ${alvoGatilho} dias e o CD passa a comprar. Como ele mantém ${alvoGatilho} dias, repõe o que sai: a venda extra vira pedido 1:1 — ${formatBRLCheio(o.pedidoRS)}. Cada unidade além disso também.`;
+    else veredito = `<strong style="color:var(--text-secondary);">Fora de alcance neste mês.</strong> Precisaria de ${r(o.extra)} un extras (${pctTxt}), acima do teto de ${alvoTeto}%. No mês que vem pode voltar à lista.`;
     return `
     <div class="rec-memoria">
         <div class="rec-memoria-vendas"><span class="rec-memoria-label">Vendas por mês (un):</span>${vendasPorMesHtml(p)}</div>
         <div class="rec-memoria-calc">
             <span class="rec-memoria-label">A conta:</span>
             Estoque hoje <strong>${r(o.livre)} un</strong> = ${Math.round(o.dias)} dias (venda média ${r(o.vm)} un/mês).
-            Gatilho de ${alvoGatilho} dias = ${r(o.vm)} × ${alvoGatilho}/30 = <strong>${r(o.gatilhoUn)} un</strong>.
+            Linha de compra (${alvoGatilho} dias) = ${r(o.vm)} × ${alvoGatilho}/30 = <strong>${r(o.gatilhoUn)} un</strong>.
             Precisa sair até o fim do mês: ${r(o.livre)} − ${r(o.gatilhoUn)} = <strong>${r(o.precisaSair)} un</strong>.
             Venda normal nos ${dr} dias restantes (projeção ${r(p.vendaParcialProjetada)} − já vendido ${r(p.vendaParcial)}) = <strong>${r(o.normal)} un</strong>.
             Esforço extra = ${r(o.precisaSair)} − ${r(o.normal)} = <strong>${o.extra > 0 ? r(o.extra) : '0'} un</strong> (${pctTxt}).
             <br>${veredito}
+            ${o.inflada ? `<br><span style="color:#b45309;"><strong>⚠ Média inflada.</strong> Os 2 últimos meses fechados venderam ${r(o.recente)} un/mês, bem abaixo da média ponderada de ${r(o.vm)} (sazonalidade ou queda). No ritmo recente o estoque de hoje dura ~${isFinite(o.diasReal) ? Math.round(o.diasReal) : '∞'} dias, então o esforço real para chegar ao gatilho é maior que o calculado. Avaliar antes de colocar na força-tarefa.</span>` : ''}
         </div>
     </div>`;
 }
@@ -4803,8 +4840,9 @@ function exportarAlvoExcel() {
     const linhas = alvoListaAtual.map(o => ({
         'CD': o.p.cd, 'Material': o.p.material, 'SAP': limpa(o.p.codigoSAP), 'EAN': limpa(o.p.ean), 'Curva': o.p.curva,
         'Situação': ALVO_LABEL[o.classe],
+        'Alerta': o.inflada ? 'Média inflada (ritmo recente ' + Math.round(o.recente) + '/mês)' : '',
         'Venda Média (un/mês)': Math.round(o.vm), 'Estoque Livre (un)': Math.round(o.livre), 'Dias Estoque Hoje': Math.round(o.dias),
-        'Gatilho (dias)': alvoGatilho, 'Gatilho (un)': Math.round(o.gatilhoUn),
+        'CD compra abaixo de (dias)': alvoGatilho, 'Linha de Compra (un)': Math.round(o.gatilhoUn),
         'Precisa Sair (un)': Math.round(o.precisaSair), 'Venda Normal até Fim do Mês (un)': Math.round(o.normal),
         'Esforço Extra (un)': Math.round(Math.max(0, o.extra)), 'Esforço Extra (%)': isFinite(o.pct) ? Math.round(Math.max(0, o.pct)) : 999,
         'Dias no Fim do Mês': Math.round(o.diasFim),
@@ -4812,11 +4850,12 @@ function exportarAlvoExcel() {
     }));
     const ws = XLSX.utils.json_to_sheet(linhas);
     const n = Object.keys(linhas[0]).length, col = XLSX.utils.encode_col;
-    ws['!cols'] = [8, 38, 10, 16, 6, 14, 14, 14, 12, 10, 12, 14, 18, 14, 12, 12, 14, 18].map(w => ({ wch: w }));
+    ws['!cols'] = [8, 38, 10, 16, 6, 14, 26, 14, 14, 12, 14, 14, 14, 18, 14, 12, 12, 14, 18].map(w => ({ wch: w }));
     ws['!autofilter'] = { ref: `A1:${col(n - 1)}${linhas.length + 1}` };
     ws['!rows'] = [{ hpt: 30 }];
     for (let c = 0; c < n; c++) { const cel = ws[col(c) + '1']; if (cel) cel.s = (c <= 1) ? XLS_HEADER_LEFT : XLS_HEADER; }
     const est = [xlsEstiloTexto('left'), xlsEstiloTexto('left', true), xlsEstiloTexto('center'), xlsEstiloTexto('center'), null, xlsEstiloTexto('center', true),
+        { ...xlsEstiloTexto('left'), font: { bold: true, color: { rgb: 'FFB45309' } } },
         xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT),
         { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } }, xlsEstiloNum(FMT_PCT), xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } }];
     alvoListaAtual.forEach((o, i) => {
@@ -4829,7 +4868,7 @@ function exportarAlvoExcel() {
     XLSX.utils.book_append_sheet(wb, ws, 'Alvo de Venda');
     const ref = String(dashboardData.dataReferencia || '').replace(/\//g, '-');
     const cdTxt = filtroCD.size === 1 ? [...filtroCD][0].replace(/[^\w-]/g, '') : 'TodosCDs';
-    baixarExcelComCongelamento(wb, `Alvo_Venda_${cdTxt}_gatilho${alvoGatilho}d_${ref || 'export'}.xlsx`, 'C2');
+    baixarExcelComCongelamento(wb, `Alvo_Venda_${cdTxt}_abaixo${alvoGatilho}d_${ref || 'export'}.xlsx`, 'C2');
 }
 
 // Listeners dos seletores da aba
@@ -5127,7 +5166,7 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-const SCRIPT_VERSAO = '2026-10-21c';
+const SCRIPT_VERSAO = '2026-10-21f';
 console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
 
 // ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html
