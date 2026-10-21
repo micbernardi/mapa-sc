@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=2026-10-21f">
+    <link rel="stylesheet" href="style.css?v=2026-10-21g">
 </head>
 <body>
     <div class="container">
@@ -221,23 +221,10 @@
                         </div>
                     </div>
                     <div class="filter-group">
-                        <label>Mostrar:</label>
+                        <label>Lista:</label>
                         <select id="alvoFilter" class="filter-select">
-                            <option value="todos">Tudo (do mais perto ao mais longe da compra)</option>
-                            <option value="radar">No radar sem pedido (cobrar a distribuidora)</option>
-                            <option value="sozinho">Caem sozinhos (só manter a venda)</option>
-                            <option value="isca" selected>Iscas (esforço dentro do teto)</option>
-                            <option value="fora">Fora de alcance (esforço acima do teto)</option>
-                        </select>
-                    </div>
-                    <div class="filter-group">
-                        <label>Ordenar por:</label>
-                        <select id="alvoSort" class="filter-select">
-                            <option value="prio" selected>Prioridade (R$ do pedido ÷ esforço)</option>
-                            <option value="pedido">Maior pedido gerado (R$)</option>
-                            <option value="esforco">Menor esforço extra (%)</option>
-                            <option value="dias">Menor cobertura hoje</option>
-                            <option value="nome">Nome (A → Z)</option>
+                            <option value="vender" selected>Vender a mais (força-tarefa)</option>
+                            <option value="cobrar">Cobrar pedido da distribuidora</option>
                         </select>
                     </div>
                 </div>
@@ -355,6 +342,6 @@
     </div>
 
     <script src="xlsx.full.min.js"></script>
-    <script src="script.js?v=2026-10-21f"></script>
+    <script src="script.js?v=2026-10-21g"></script>
 </body>
 </html>
