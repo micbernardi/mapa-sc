@@ -4702,16 +4702,16 @@ function updateAlvo() {
     const soma = (l, k) => l.reduce((s, o) => s + o[k], 0);
 
     if (kpisEl) kpisEl.innerHTML = `<div class="alvo-kpis">
-        <div class="alvo-kpi isca"><div class="alvo-kpi-val">${vender.length}</div><div class="alvo-kpi-lbl">produtos para <strong>vender a mais</strong> · ${Math.round(vender.reduce((s, o) => s + Math.max(0, o.extra), 0)).toLocaleString('pt-BR')} un extras · ${formatBRLCheio(soma(vender, 'pedidoRS'))}</div></div>
-        <div class="alvo-kpi radar"><div class="alvo-kpi-val">${cobrar.length}</div><div class="alvo-kpi-lbl">produtos para <strong>cobrar pedido</strong> · ${formatBRLCheio(soma(cobrar, 'pedidoRS'))}</div></div>
+        <div class="alvo-kpi isca"><div class="alvo-kpi-val">${vender.length}</div><div class="alvo-kpi-lbl">produtos para <strong>vender a mais</strong> · ${Math.round(vender.reduce((s, o) => s + Math.max(0, o.extra), 0)).toLocaleString('pt-BR')} un extras · necessitará comprar ${formatBRLCheio(soma(vender, 'pedidoRS'))}</div></div>
+        <div class="alvo-kpi radar"><div class="alvo-kpi-val">${cobrar.length}</div><div class="alvo-kpi-lbl">produtos para <strong>cobrar pedido</strong> · necessita comprar ${formatBRLCheio(soma(cobrar, 'pedidoRS'))}</div></div>
     </div>`;
 
     const foco = (document.getElementById('alvoFilter') || {}).value || 'vender';
     const lista = foco === 'cobrar' ? cobrar : vender;
     alvoListaAtual = lista;
     const intro = foco === 'cobrar'
-        ? `<div class="rec-intro"><strong>Cobrar pedido</strong>: já estão abaixo de ${alvoGatilho} dias. Onde não há nada a caminho, a distribuidora deveria estar comprando; onde já há, o pedido existente é insuficiente e o valor mostrado é o <strong>reforço</strong> que falta (mesma conta da aba Sugestões).</div>`
-        : `<div class="rec-intro"><strong>Vender a mais</strong>: vendendo a quantidade indicada além do normal até o fim do mês, o estoque do CD fica abaixo de ${alvoGatilho} dias e ele passa a comprar. <strong>0 un</strong> = basta manter o ritmo normal de venda.</div>`;
+        ? `<div class="rec-intro"><strong>Cobrar pedido</strong>: já estão abaixo de ${alvoGatilho} dias. Onde não há nada a caminho, a distribuidora deveria estar comprando; onde já há, o pedido existente é insuficiente. <strong>Necessita Comprar</strong> = o que o CD ainda precisa comprar para fechar o mês com ${alvoGatilho} dias de estoque, em caixas inteiras.</div>`
+        : `<div class="rec-intro"><strong>Vender a mais</strong>: vendendo a quantidade indicada além do normal até o fim do mês, o estoque do CD fica abaixo de ${alvoGatilho} dias e ele passa a comprar. <strong>0 un</strong> = basta manter o ritmo normal. <strong>Necessitará Comprar</strong> = o que o CD vai precisar comprar quando isso acontecer.</div>`;
     if (!lista.length) { container.innerHTML = intro + '<div class="empty-state">Nenhum produto nesta lista.</div>'; return; }
     container.innerHTML = intro + renderAlvoTable(lista, filtroCD.size === 1, foco);
 }
@@ -4728,7 +4728,7 @@ function renderAlvoTable(lista, hideCD, foco) {
             <td style="text-align:right;">${Math.round(o.dias)} d</td>
             ${vender ? `<td style="text-align:right;">${o.extra > 0 ? `<span class="alvo-extra">${r0(o.extra)} un</span>` : '<span class="alvo-extra zero">0 · manter ritmo</span>'}</td>`
                      : `<td style="text-align:right;">${o.aCaminho > 0 ? `<span style="color:#0891b2;font-weight:600;">${r0(o.aCaminho)} un</span><div style="font-size:0.7rem;color:var(--text-secondary);">reforçar</div>` : '<span style="color:#cbd5e1;">—</span>'}</td>`}
-            <td style="text-align:right;"><strong style="color:var(--primary);">${formatBRLCheio(o.pedidoRS)}</strong></td>
+            <td style="text-align:right;"><strong style="color:var(--primary);">${formatBRLCheio(o.pedidoRS)}</strong><div style="font-size:0.72rem;color:var(--text-secondary);">${r0(o.pedidoUn)} un</div></td>
         </tr>`).join('');
     const th = (l, al, t) => `<th style="text-align:${al};"${t ? ` title="${t}"` : ''}>${l}</th>`;
     return `
@@ -4740,8 +4740,8 @@ function renderAlvoTable(lista, hideCD, foco) {
                 ${th('Produto', 'left')}
                 ${th('Curva', 'left')}
                 ${th('Estoque hoje', 'right', 'Dias de estoque livre hoje')}
-                ${vender ? th('Vender a mais até o fim do mês', 'right', 'Unidades além da venda normal para o estoque ficar abaixo da régua') : th('Já a caminho', 'right', 'Pedido já existente (trânsito + entrega). Quando há, o pedido gerado é o reforço que ainda falta.')}
-                ${th('Pedido gerado', 'right', vender ? 'A venda extra, que o CD precisa repor (a preço de fábrica)' : 'Reposição esperada até a régua (a preço de fábrica)')}
+                ${vender ? th('Vender a mais até o fim do mês', 'right', 'Unidades além da venda normal para o estoque ficar abaixo da régua') : th('Já a caminho', 'right', 'Pedido já existente (trânsito + entrega). Quando há, Necessita Comprar é o reforço que ainda falta.')}
+                ${th(vender ? 'Necessitará Comprar' : 'Necessita Comprar', 'right', vender ? 'O que o CD vai precisar comprar quando o estoque cair abaixo da régua (caixas inteiras, a preço de fábrica)' : 'O que o CD precisa comprar para fechar o mês com estoque saudável (caixas inteiras, a preço de fábrica)')}
             </tr></thead>
             <tbody>${rows}</tbody>
         </table>
@@ -4758,8 +4758,9 @@ function exportarAlvoExcel() {
         const l = { 'CD': o.p.cd, 'Material': o.p.material, 'SAP': limpa(o.p.codigoSAP), 'Curva': o.p.curva, 'Estoque Hoje (dias)': Math.round(o.dias) };
         if (vender) l['Vender a Mais até o Fim do Mês (un)'] = Math.round(Math.max(0, o.extra));
         else l['Já a Caminho (un)'] = Math.round(o.aCaminho);
-        l['Pedido Gerado (un)'] = Math.round(o.pedidoUn);
-        l['Pedido Gerado (R$ PF)'] = +o.pedidoRS.toFixed(2);
+        const rot = vender ? 'Necessitará Comprar' : 'Necessita Comprar';
+        l[rot + ' (un)'] = Math.round(o.pedidoUn);
+        l[rot + ' (R$ PF)'] = +o.pedidoRS.toFixed(2);
         return l;
     });
     const ws = XLSX.utils.json_to_sheet(linhas);
@@ -5078,7 +5079,7 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-const SCRIPT_VERSAO = '2026-10-21i';
+const SCRIPT_VERSAO = '2026-10-21k';
 console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
 
 // ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html
