@@ -4586,16 +4586,28 @@ function calcularAlvo(p) {
     if (p.status === 'parado') { base.motivo = 'parado (sem giro recente)'; return base; }
     if (aCaminho > 0) { base.motivo = 'já tem reposição a caminho (' + aCaminho.toLocaleString('pt-BR') + ' un) — a entrega anula o esforço'; return base; }
     base.gatilhoUn = vm * alvoGatilho / 30;
-    if (Math.round(dias) <= alvoGatilho) { base.motivo = 'já está no radar da distribuidora (' + Math.round(dias) + ' d ≤ ' + alvoGatilho + ' d)'; return base; }
     const mc = memoriaCompra(p);
+    base.pedidoUn = Math.max(0, vm * (getMetaDias(p) - alvoGatilho) / 30);
+    base.pedidoRS = base.pedidoUn * (p.pf || 0);
+    // JÁ NO RADAR: estoque de hoje já está no gatilho ou abaixo. Não some da lista — vira caso de
+    // COBRANÇA à distribuidora (pela premissa do gatilho, ela já deveria estar comprando).
+    // Assim, ao subir o gatilho, o item avança de situação (fora → isca → cai sozinho → no radar)
+    // em vez de desaparecer.
+    if (Math.round(dias) <= alvoGatilho) {
+        base.classe = 'radar';
+        base.normal = Math.max(0, mc.restoMes || 0);
+        base.estoqueFim = livre - base.normal;
+        base.diasFim = (base.estoqueFim / vm) * 30;
+        base.pct = 0;
+        base.prio = base.pedidoRS / 5;
+        return base;
+    }
     base.normal = Math.max(0, mc.restoMes || 0);
     base.precisaSair = Math.max(0, livre - base.gatilhoUn);
     base.extra = base.precisaSair - base.normal;
     base.pct = base.normal > 0 ? (base.extra / base.normal) * 100 : (base.extra > 0 ? Infinity : 0);
     base.estoqueFim = livre - base.normal;
     base.diasFim = (base.estoqueFim / vm) * 30;
-    base.pedidoUn = Math.max(0, vm * (getMetaDias(p) - alvoGatilho) / 30);
-    base.pedidoRS = base.pedidoUn * (p.pf || 0);
     if (base.extra <= 0) base.classe = 'sozinho';
     else if (base.pct <= alvoTeto) base.classe = 'isca';
     else base.classe = 'fora';
@@ -4604,7 +4616,8 @@ function calcularAlvo(p) {
     return base;
 }
 
-const ALVO_LABEL = { isca: 'Isca', sozinho: 'Cai sozinho', fora: 'Fora de alcance', excluido: 'Excluído' };
+const ALVO_LABEL = { radar: 'No radar · cobrar pedido', sozinho: 'Cai sozinho', isca: 'Isca', fora: 'Fora de alcance', excluido: 'Excluído' };
+const ALVO_ORDEM = { radar: 0, sozinho: 1, isca: 2, fora: 3 };
 
 function renderAlvoParams() {
     const el = document.getElementById('alvoParams');
@@ -4642,6 +4655,7 @@ function updateAlvo() {
     if (filtroCurva.size) prods = prods.filter(p => filtroCurva.has(p.curva));
     const todos = prods.map(calcularAlvo).filter(o => o.classe !== 'excluido');
 
+    const radar = todos.filter(o => o.classe === 'radar');
     const isca = todos.filter(o => o.classe === 'isca');
     const sozinho = todos.filter(o => o.classe === 'sozinho');
     const fora = todos.filter(o => o.classe === 'fora');
@@ -4652,10 +4666,11 @@ function updateAlvo() {
         <div class="alvo-kpi pedido"><div class="alvo-kpi-val">${formatBRLCheio(pedidoIsca)}</div><div class="alvo-kpi-lbl">pedidos que as iscas geram (PF)</div></div>
         <div class="alvo-kpi sozinho"><div class="alvo-kpi-val">${sozinho.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">caem ao gatilho sozinhos · ${formatBRLCheio(pedidoSozinho)} em pedidos</div></div>
         <div class="alvo-kpi fora"><div class="alvo-kpi-val">${fora.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">fora de alcance neste mês</div></div>
+        <div class="alvo-kpi radar"><div class="alvo-kpi-val">${radar.length.toLocaleString('pt-BR')}</div><div class="alvo-kpi-lbl">no radar sem pedido · ${formatBRLCheio(radar.reduce((s, o) => s + o.pedidoRS, 0))} a cobrar</div></div>
     </div>`;
 
     const foco = (document.getElementById('alvoFilter') || {}).value || 'isca';
-    let lista = foco === 'isca' ? isca : foco === 'sozinho' ? sozinho : foco === 'fora' ? fora : todos;
+    let lista = foco === 'isca' ? isca : foco === 'sozinho' ? sozinho : foco === 'fora' ? fora : foco === 'radar' ? radar : todos;
     const ordem = (document.getElementById('alvoSort') || {}).value || 'prio';
     const nome = o => rotuloProduto(o.p);
     lista = lista.slice().sort((a, b) => {
@@ -4663,6 +4678,7 @@ function updateAlvo() {
         if (ordem === 'esforco') return (a.pct - b.pct) || nome(a).localeCompare(nome(b), 'pt-BR');
         if (ordem === 'dias') return (a.dias - b.dias) || nome(a).localeCompare(nome(b), 'pt-BR');
         if (ordem === 'nome') return nome(a).localeCompare(nome(b), 'pt-BR') || a.p.cd.localeCompare(b.p.cd);
+        if (foco === 'todos') return (ALVO_ORDEM[a.classe] - ALVO_ORDEM[b.classe]) || (b.prio - a.prio) || nome(a).localeCompare(nome(b), 'pt-BR');
         return (b.prio - a.prio) || nome(a).localeCompare(nome(b), 'pt-BR');
     });
     alvoListaAtual = lista;
@@ -4672,10 +4688,11 @@ function updateAlvo() {
         isca: `<strong>Iscas</strong>: produtos acima do gatilho de ${alvoGatilho} dias que chegam a ele até o fim do mês com um esforço extra de venda de até ${alvoTeto}% sobre o ritmo normal. É a lista para a força-tarefa: vender o "extra" cria a necessidade de compra no CD.`,
         sozinho: `<strong>Caem sozinhos</strong>: no ritmo normal de venda já chegam ao gatilho até o fim do mês. Não precisam de esforço extra — só garantir que a venda normal aconteça.`,
         fora: `<strong>Fora de alcance</strong>: precisariam de esforço acima de ${alvoTeto}% para chegar ao gatilho neste mês. Candidatos para o mês que vem, quando a beira sobe.`,
-        todos: 'Todos os produtos acima do gatilho, com a classificação de cada um.'
+        radar: `<strong>No radar sem pedido</strong>: estoque de hoje já está no gatilho de ${alvoGatilho} dias ou abaixo, sem nada a caminho. Pela premissa do gatilho, a distribuidora já deveria estar comprando — é caso de <strong>cobrar o pedido</strong> do comprador, não de esforço de venda.`,
+        todos: 'Todos os produtos com giro e sem reposição a caminho, do mais próximo da compra ao mais distante: no radar → cai sozinho → isca → fora de alcance.'
     };
     const excl = prods.length - todos.length;
-    const intro = `<div class="rec-intro">${introMap[foco]}<br><strong>${lista.length} itens</strong> em ${escopo} · fora da conta: ${excl} (já no radar, com reposição a caminho, parados, em falta ou sem venda)</div>`;
+    const intro = `<div class="rec-intro">${introMap[foco]}<br><strong>${lista.length} itens</strong> em ${escopo} · fora da conta: ${excl} (com reposição a caminho, parados, em falta ou sem venda)</div>`;
     if (!lista.length) { container.innerHTML = intro + '<div class="empty-state">Nenhum produto neste critério.</div>'; return; }
     container.innerHTML = intro + renderAlvoTable(lista, filtroCD.size === 1);
 }
@@ -4738,6 +4755,19 @@ function explicacaoAlvo(o) {
     const dr = alvoDiasRestantes();
     const pctTxt = !isFinite(o.pct) ? 'sem venda prevista no mês' : (o.pct <= 0 ? 'nenhum esforço extra' : `+${Math.round(o.pct)}% sobre a venda normal`);
     let veredito;
+    if (o.classe === 'radar') {
+        return `
+    <div class="rec-memoria">
+        <div class="rec-memoria-vendas"><span class="rec-memoria-label">Vendas por mês (un):</span>${vendasPorMesHtml(p)}</div>
+        <div class="rec-memoria-calc">
+            <span class="rec-memoria-label">A conta:</span>
+            Estoque hoje <strong>${r(o.livre)} un</strong> = ${Math.round(o.dias)} dias (venda média ${r(o.vm)} un/mês).
+            Gatilho de ${alvoGatilho} dias = ${r(o.vm)} × ${alvoGatilho}/30 = <strong>${r(o.gatilhoUn)} un</strong>.
+            O estoque <strong>já está no gatilho ou abaixo</strong> e não há nada a caminho.
+            <br><strong style="color:#b45309;">No radar sem pedido.</strong> Pela premissa do gatilho, o CD já deveria estar comprando. Ação: cobrar o pedido da distribuidora — esperado ${r(o.pedidoUn)} un · ${formatBRLCheio(o.pedidoRS)}.
+        </div>
+    </div>`;
+    }
     if (o.classe === 'sozinho') veredito = `<strong style="color:var(--saudavel);">Cai sozinho.</strong> No ritmo normal o estoque chega a ${r(o.estoqueFim)} un (${Math.round(o.diasFim)} d) no fim do mês — já abaixo do gatilho. Só não deixar a venda cair.`;
     else if (o.classe === 'isca') veredito = `<strong style="color:#0e7490;">Isca.</strong> Vendendo <strong>${r(o.extra)} un a mais</strong> que o normal até o fim do mês (${pctTxt}), o estoque cai a ${r(o.gatilhoUn)} un = ${alvoGatilho} dias e o CD passa a comprar. Pedido esperado: ${r(o.pedidoUn)} un · ${formatBRLCheio(o.pedidoRS)}.`;
     else veredito = `<strong style="color:var(--text-secondary);">Fora de alcance neste mês.</strong> Precisaria de ${r(o.extra)} un extras (${pctTxt}), acima do teto de ${alvoTeto}%. No mês que vem a beira sobe e ele pode voltar à lista.`;
@@ -5097,7 +5127,7 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-const SCRIPT_VERSAO = '2026-10-21b';
+const SCRIPT_VERSAO = '2026-10-21c';
 console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
 
 // ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html

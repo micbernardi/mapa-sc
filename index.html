@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=2026-10-21b">
+    <link rel="stylesheet" href="style.css?v=2026-10-21c">
 </head>
 <body>
     <div class="container">
@@ -223,10 +223,11 @@
                     <div class="filter-group">
                         <label>Mostrar:</label>
                         <select id="alvoFilter" class="filter-select">
-                            <option value="isca" selected>Iscas (esforço dentro do teto)</option>
+                            <option value="todos">Tudo (do mais perto ao mais longe da compra)</option>
+                            <option value="radar">No radar sem pedido (cobrar a distribuidora)</option>
                             <option value="sozinho">Caem sozinhos (só manter a venda)</option>
+                            <option value="isca" selected>Iscas (esforço dentro do teto)</option>
                             <option value="fora">Fora de alcance (esforço acima do teto)</option>
-                            <option value="todos">Tudo o que está acima do gatilho</option>
                         </select>
                     </div>
                     <div class="filter-group">
@@ -354,6 +355,6 @@
     </div>
 
     <script src="xlsx.full.min.js"></script>
-    <script src="script.js?v=2026-10-21b"></script>
+    <script src="script.js?v=2026-10-21c"></script>
 </body>
 </html>

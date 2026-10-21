@@ -2298,3 +2298,6 @@ canvas {
 .alvo-extra { font-weight: 800; color: #0e7490; }
 .alvo-extra.zero { color: var(--saudavel); }
 .alvo-extra.alto { color: var(--text-secondary); }
+
+.status-badge.radar { background: #fef3c7; color: #b45309; }
+.alvo-kpi.radar .alvo-kpi-val { color: #b45309; }
