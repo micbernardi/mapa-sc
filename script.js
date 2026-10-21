@@ -58,7 +58,11 @@ const metaDiasPorLinha = {};
 // os produtos" da aba Sugestões de Compra.
 let metaDiasGlobal = META_DIAS_COBERTURA;
 function chaveLinha(p) { return p.cd + '||' + p.sku; }
+// Quando definido (só dentro de montarSnapshot), força esta meta em TODAS as linhas, ignorando
+// ajustes individuais. Garante que o retrato comparativo fique mesmo congelado em 45 dias.
+let META_FORCADA = null;
 function getMetaDias(p) {
+    if (typeof META_FORCADA === 'number') return META_FORCADA;
     const v = metaDiasPorLinha[chaveLinha(p)];
     return (typeof v === 'number' && !isNaN(v)) ? v : metaDiasGlobal;
 }
@@ -123,8 +127,9 @@ function ajustarAoMultiplo(p, quantidade) {
     if (sap.endsWith('.0')) sap = sap.slice(0, -2);
     const multiplo = MULTIPLOS_CAIXA[sap];
     if (!multiplo || multiplo <= 0) {
-        // Sem múltiplo cadastrado: mantém a quantidade original
-        return { multiplo: null, caixas: null, ajustado: quantidade, temMultiplo: false };
+        // Sem múltiplo cadastrado: mantém a quantidade, arredondada para cima ao inteiro
+        // (não existe compra fracionada; antes a fração vazava para os totais).
+        return { multiplo: null, caixas: null, ajustado: Math.ceil(Math.max(0, quantidade)), temMultiplo: false };
     }
     if (quantidade <= 0) {
         return { multiplo, caixas: 0, ajustado: 0, temMultiplo: true };
@@ -779,12 +784,6 @@ function atualizarRotuloFaltas() {
 function processWorkbook(workbook, nomeArquivo) {
     // Data de referência vem do nome do arquivo: dia = corte do mês vigente,
     // mês = mês vigente (parcial). A janela de análise é esse mês + os 4 anteriores.
-    const dataArq = parseDataArquivo(nomeArquivo);
-    const diasCorridos = dataArq.dia;
-    JANELA = construirJanela(dataArq.mes0);
-    console.log('Mês vigente (parcial):', MESES_CAP[dataArq.mes0], '| corte dia', diasCorridos,
-        '| janela:', JANELA.map(j => j.abbr).join(', '));
-
     // A fonte correta é a aba "Mapa Estoque", que traz cada produto/CD/reserva
     // uma única vez e tem o campo "Curva CD" com a curva real. As abas
     // CURVA - A/B/C contêm dados sobrepostos (a mesma linha repetida nas 3),
@@ -797,9 +796,30 @@ function processWorkbook(workbook, nomeArquivo) {
         throw new Error('Aba "Mapa Estoque" não encontrada na planilha.');
     }
 
+    // Data da base: 1º do nome do arquivo, 2º do nome da aba ("Mapa Estoque base 19.10.26").
+    // Nunca assume a data de hoje: um arquivo renomeado deslocaria a janela inteira sem aviso.
+    let dataArq = parseDataArquivo(nomeArquivo);
+    if (!dataArq) dataArq = parseDataArquivo(abaMapa);
+    if (!dataArq) {
+        throw new Error('Não encontrei a data da base nem no nome do arquivo nem no nome da aba "' + abaMapa +
+            '".\nRenomeie o arquivo com a data (ex.: ..._19_10_26.xlsx) e carregue de novo.');
+    }
+    const diasCorridos = dataArq.dia;
+    DATA_BASE = new Date(dataArq.ano, dataArq.mes0, dataArq.dia);
+    JANELA = construirJanela(dataArq.mes0);
+    console.log('Mês vigente (parcial):', MESES_CAP[dataArq.mes0], '| corte dia', diasCorridos,
+        '| janela:', JANELA.map(j => j.abbr).join(', '));
+
     console.log('Lendo aba:', abaMapa);
 
     const ws = workbook.Sheets[abaMapa];
+    // Resolve os títulos reais ANTES de ler as linhas (tolerância a rótulos que mudam entre bases).
+    const headerRow = (XLSX.utils.sheet_to_json(ws, { header: 1, range: 0 })[0] || []).map(h => String(h == null ? '' : h));
+    construirMapaColunas(headerRow);
+    if (COLS_AUSENTES.length) {
+        throw new Error('A aba "' + abaMapa + '" não tem as colunas obrigatórias: ' + COLS_AUSENTES.join(', ') +
+            '.\nVerifique se o layout da planilha mudou.');
+    }
     const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
     // Consolida por CD+Material, somando as reservas (Regular, Colaborativa,
@@ -810,6 +830,7 @@ function processWorkbook(workbook, nomeArquivo) {
 
     // Finalizar cálculos por produto
     let products = Object.values(mapa);
+    detectarFatorAM(products);   // normaliza a AM (dias do mês) para base 30 antes de classificar
     products.forEach(finalizarProduto);
 
     // Excluir produtos totalmente inativos (sem estoque e sem venda no período)
@@ -817,7 +838,7 @@ function processWorkbook(workbook, nomeArquivo) {
     products = products.filter(p => !(p.estoqueTotal === 0 && p.vendaMedia === 0));
     console.log(`Consolidados: ${antes} | Ativos: ${products.length} | Inativos removidos: ${antes - products.length}`);
 
-    return consolidate(products, nomeArquivo, diasCorridos);
+    return consolidate(products, dataArq, diasCorridos);
 }
 
 const _num = (v) => {
@@ -825,19 +846,98 @@ const _num = (v) => {
     return isNaN(n) ? 0 : n;
 };
 
+// ============================================
+// RESOLVEDOR DE COLUNAS — tolerante a mudança de rótulo entre bases
+// ------------------------------------------------------------
+// O gerador da planilha não mantém os títulos estáveis entre meses (ex.: "Vendas de Julho R$"
+// virou "Vendas Julho R$"; "Estoque Livre R$" virou um segundo "Estoque Total R$"). Em vez de
+// acessar row['Nome Exato'], o código resolve cada coluna LÓGICA para o título REAL que veio na
+// aba, comparando os nomes normalizados (sem acento, sem maiúsculas, sem "de/da/do", sem
+// pontuação). Colunas obrigatórias ausentes interrompem a carga com a lista do que faltou, para
+// o problema aparecer no upload e não num KPI zerado.
+// ============================================
+let COLMAP = {};          // nome lógico -> título real na planilha
+let COLS_AUSENTES = [];   // colunas obrigatórias que não foram encontradas na última carga
+function normCol(s) {
+    return String(s == null ? '' : s)
+        .toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/\$/g, ' rs ')
+        .replace(/[^a-z0-9 ]/g, ' ')
+        .replace(/\b(de|da|do|dos|das)\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+// Colunas que o dashboard usa. required = sem ela a análise fica errada.
+const COLUNAS_ESPERADAS = [
+    { key: 'CD', required: true }, { key: 'Reserva', required: true }, { key: 'Material', required: true },
+    { key: 'Código SAP', required: true }, { key: 'EAN' }, { key: 'Curva CD', required: true },
+    { key: 'Fornecedor' }, { key: 'Cód. Fornecedor' }, { key: 'Código Legado' }, { key: 'Status Material' },
+    { key: 'PF', required: true },
+    { key: 'Venda Média Ponderada', required: true }, { key: 'Venda Média Ponderada R$' },
+    { key: 'Estoque Livre', required: true }, { key: 'Estoque Qualidade' }, { key: 'Estoque Bloqueado' },
+    { key: 'Estoque Total', required: true },
+    { key: 'Pendência Trânsito', required: true }, { key: 'Pendência Entrega', required: true },
+    { key: 'DIAS DE ESTOQUE LIVRE UNDS' }, { key: 'PROJEÇÃO UNDS' }, { key: 'Data Última Entrada' }
+];
+// Monta COLMAP a partir dos títulos reais da aba. Também resolve as colunas de venda por mês
+// da JANELA (Qtde. Vend. <mês> e Vendas [de] <Mês> R$), gravando o título real em cada mês.
+function construirMapaColunas(headers) {
+    const porNorm = {};
+    headers.forEach(h => { const n = normCol(h); if (n && !(n in porNorm)) porNorm[n] = h; });
+    COLMAP = {}; COLS_AUSENTES = [];
+    COLUNAS_ESPERADAS.forEach(c => {
+        const real = porNorm[normCol(c.key)];
+        if (real !== undefined) COLMAP[c.key] = real;
+        else if (c.required) COLS_AUSENTES.push(c.key);
+    });
+    JANELA.forEach(mes => {
+        const q = porNorm[normCol(mes.colQtd)];
+        const r = porNorm[normCol(mes.colRS)];
+        if (q !== undefined) mes.colQtd = q; else COLS_AUSENTES.push(mes.colQtd);
+        if (r !== undefined) mes.colRS = r; else console.warn('Coluna de venda R$ não encontrada:', mes.colRS);
+    });
+    if (COLS_AUSENTES.length) console.warn('Colunas obrigatórias ausentes:', COLS_AUSENTES);
+    console.log('Colunas resolvidas:', COLMAP);
+}
+// Lê uma coluna lógica da linha pelo título real resolvido (cai no nome literal se não houver mapa).
+function col(row, key) {
+    const real = COLMAP[key];
+    return row[real !== undefined ? real : key];
+}
+// Fator entre a coluna AM da planilha e Estoque Livre ÷ Venda Média × 30. A planilha calcula a
+// AM com os DIAS DO MÊS (31 em outubro, 30 em novembro...), não com 30 fixo. Detecta o fator
+// empiricamente (mediana) para normalizar a AM em base 30 — a mesma base da meta de cobertura,
+// do diasTotal e das visões agregadas. Sem isso, o mesmo produto é medido com duas réguas.
+let FATOR_AM = 1;
+function detectarFatorAM(products) {
+    const razoes = [];
+    products.forEach(p => {
+        if (p.vendaMedia > 0 && p.estoqueLivre > 0 && p.amCount === 1 && isFinite(p.amPlanilha) && p.amPlanilha > 0) {
+            razoes.push(p.amPlanilha / ((p.estoqueLivre / p.vendaMedia) * 30));
+        }
+    });
+    if (razoes.length < 20) { FATOR_AM = 1; return; }
+    razoes.sort((a, b) => a - b);
+    const med = razoes[Math.floor(razoes.length / 2)];
+    // Só aceita fatores plausíveis (28/30 a 31/30); fora disso, desconfia da AM e recalcula.
+    FATOR_AM = (med >= 0.93 && med <= 1.04) ? med : NaN;
+    console.log('Fator AM/base30 detectado:', med.toFixed(4), isNaN(FATOR_AM) ? '(fora da faixa: AM ignorada, recálculo ×30)' : '');
+}
+
 function acumularLinha(mapa, row, curvaAba, diasCorridos) {
-    const cd = String(row['CD'] || '').trim();
-    const material = String(row['Material'] || '').trim();
+    const cd = String(col(row, 'CD') || '').trim();
+    const material = String(col(row, 'Material') || '').trim();
     if (!cd || !material) return;
 
     // A curva REAL está no campo "Curva CD" da linha.
-    let curva = String(row['Curva CD'] || '').trim().toUpperCase();
+    let curva = String(col(row, 'Curva CD') || '').trim().toUpperCase();
     if (curva !== 'A' && curva !== 'B' && curva !== 'C') {
         curva = curvaAba || 'N/A'; // fallback se o campo vier vazio
     }
 
-    const codigoSAP = String(row['Código SAP'] || '');
-    const ean = String(row['EAN'] || '');
+    const codigoSAP = String(col(row, 'Código SAP') || '');
+    const ean = String(col(row, 'EAN') || '');
     // Identidade pelo SKU (SAP), não pela descrição: SKUs distintos ficam separados.
     const sku = skuKey(codigoSAP, ean, material);
     const key = cd + '||' + sku;
@@ -846,13 +946,13 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
         mapa[key] = {
             cd, material, curva, sku,
             reserva: '',
-            fornecedor: String(row['Fornecedor'] || '').trim(),
+            fornecedor: String(col(row, 'Fornecedor') || '').trim(),
             codigoSAP: codigoSAP,
             ean: ean,
             // Códigos da Santa Cruz / fornecedor, usados na exportação do Gargalo.
-            codigoLegado: String(row['Código Legado'] || '').trim(),
-            codFornecedor: String(row['Cód. Fornecedor'] || '').trim(),
-            statusMaterial: String(row['Status Material'] || '').trim(),
+            codigoLegado: String(col(row, 'Código Legado') || '').trim(),
+            codFornecedor: String(col(row, 'Cód. Fornecedor') || '').trim(),
+            statusMaterial: String(col(row, 'Status Material') || '').trim(),
             pf: 0,
 
             // Vendas por mês da janela (índice 0 = mais antigo ... 4 = mês vigente parcial)
@@ -883,36 +983,38 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
     o.linhasReserva++;
 
     // Preço de fábrica: mantém o maior valor não-zero
-    o.pf = Math.max(o.pf, _num(row['PF']));
+    o.pf = Math.max(o.pf, _num(col(row, 'PF')));
 
     // Tudo (vendas E estoque) conta APENAS a reserva livre (Regular).
     // O estoque livre só existe na Regular, então a velocidade de giro precisa
     // vir da mesma reserva: os dias de estoque livre são Estoque Livre (Regular)
     // ÷ Venda (Regular), igual à coluna do Excel. Somar a venda de todas as
     // reservas com estoque só da Regular inflava a velocidade e derrubava os dias.
-    const reserva = String(row['Reserva'] || '').trim();
+    const reserva = String(col(row, 'Reserva') || '').trim();
     if (!RESERVA_LIVRE || reserva === RESERVA_LIVRE) {
         // Vendas por mês da janela (quantidade e R$)
         JANELA.forEach((mes, i) => {
             o.vendas[i] += _num(row[mes.colQtd]);
             o.vendasRS[i] += _num(row[mes.colRS]);
         });
-        o.vendaMedia += _num(row['Venda Média Ponderada']);
-        o.vendaMediaRS += _num(row['Venda Média Ponderada R$']);
-        o.projecaoMes += _num(row['PROJEÇÃO UNDS']);
+        o.vendaMedia += _num(col(row, 'Venda Média Ponderada'));
+        o.vendaMediaRS += _num(col(row, 'Venda Média Ponderada R$'));
+        o.projecaoMes += _num(col(row, 'PROJEÇÃO UNDS'));
 
-        o.estoqueLivre += _num(row['Estoque Livre']);
-        o.estoqueQualidade += _num(row['Estoque Qualidade']);
-        o.estoqueBloqueado += _num(row['Estoque Bloqueado']);
-        o.estoqueTotal += _num(row['Estoque Total']);
-        o.estoqueLivreRS += _num(row['Estoque Livre R$']);
-        o.pendenciaTransito += _num(row['Pendência Trânsito']);
-        o.pendenciaEntrega += _num(row['Pendência Entrega']);
+        o.estoqueLivre += _num(col(row, 'Estoque Livre'));
+        o.estoqueQualidade += _num(col(row, 'Estoque Qualidade'));
+        o.estoqueBloqueado += _num(col(row, 'Estoque Bloqueado'));
+        o.estoqueTotal += _num(col(row, 'Estoque Total'));
+        // R$ do estoque livre = Estoque Livre × PF. Não lê coluna por nome: na base 10/26 a
+        // coluna "Estoque Livre R$" veio rotulada como um 2º "Estoque Total R$" (zerava os KPIs).
+        o.estoqueLivreRS += _num(col(row, 'Estoque Livre')) * _num(col(row, 'PF'));
+        o.pendenciaTransito += _num(col(row, 'Pendência Trânsito'));
+        o.pendenciaEntrega += _num(col(row, 'Pendência Entrega'));
 
         // Dias de estoque livre JÁ vêm calculados na planilha, na coluna AM
         // ("DIAS DE ESTOQUE LIVRE UNDS" = Estoque Livre ÷ Venda Média Ponderada × 30).
         // Captura esse valor da própria linha Regular para usar como verdade.
-        const amRaw = row['DIAS DE ESTOQUE LIVRE UNDS'];
+        const amRaw = col(row, 'DIAS DE ESTOQUE LIVRE UNDS');
         const amNum = parseFloat(amRaw);
         if (amRaw !== '' && amRaw != null && !isNaN(amNum)) {
             o.amPlanilha = amNum;
@@ -921,14 +1023,14 @@ function acumularLinha(mapa, row, curvaAba, diasCorridos) {
     }
 
     // Data da última entrada: mantém a mais recente
-    const d = String(row['Data Última Entrada'] || '').trim();
+    const d = String(col(row, 'Data Última Entrada') || '').trim();
     if (d && chaveData(d) > chaveData(o.dataUltimaEntrada)) o.dataUltimaEntrada = d;
 
     // Completa metadados que possam ter vindo vazios na 1ª linha
-    if (!o.fornecedor) o.fornecedor = String(row['Fornecedor'] || '').trim();
-    if (!o.codigoSAP) o.codigoSAP = String(row['Código SAP'] || '');
-    if (!o.codigoLegado) o.codigoLegado = String(row['Código Legado'] || '').trim();
-    if (!o.codFornecedor) o.codFornecedor = String(row['Cód. Fornecedor'] || '').trim();
+    if (!o.fornecedor) o.fornecedor = String(col(row, 'Fornecedor') || '').trim();
+    if (!o.codigoSAP) o.codigoSAP = String(col(row, 'Código SAP') || '');
+    if (!o.codigoLegado) o.codigoLegado = String(col(row, 'Código Legado') || '').trim();
+    if (!o.codFornecedor) o.codFornecedor = String(col(row, 'Cód. Fornecedor') || '').trim();
 }
 
 function finalizarProduto(p) {
@@ -944,8 +1046,11 @@ function finalizarProduto(p) {
     // todas as curvas (A, B e C). Só recalcula (Estoque Livre Regular ÷ Venda Média
     // Regular × 30, idêntico à fórmula da coluna AM) quando o valor da planilha não está
     // disponível: visões agregadas (SKU/Brasil, médias por CD) ou venda não-positiva.
-    if (p.vendaMedia > 0 && p.amCount === 1 && typeof p.amPlanilha === 'number' && isFinite(p.amPlanilha)) {
-        p.diasLivre = p.amPlanilha;
+    // A AM da planilha é calculada com os DIAS DO MÊS da base (31 em outubro), e o resto do
+    // dashboard trabalha em base 30 (meta = VM × dias/30). Divide pelo FATOR_AM detectado na carga
+    // para colocar tudo na mesma régua; se a AM parecer inconsistente (FATOR_AM = NaN), recalcula.
+    if (p.vendaMedia > 0 && p.amCount === 1 && typeof p.amPlanilha === 'number' && isFinite(p.amPlanilha) && isFinite(FATOR_AM)) {
+        p.diasLivre = p.amPlanilha / FATOR_AM;
     } else {
         p.diasLivre = p.vendaMedia > 0 ? (p.estoqueLivre / p.vendaMedia) * 30 : 0;
     }
@@ -956,7 +1061,10 @@ function finalizarProduto(p) {
     // Venda do mês vigente (parcial) e projeção de mês cheio a partir do corte
     p.vendaParcial = p.vendas[4];
     p.vendaParcialRS = p.vendasRS[4];
-    p.vendaParcialProjetada = p.diasCorridos > 0 ? (p.vendaParcial / p.diasCorridos) * 30 : p.vendaParcial;
+    // Projeção ÚNICA do mês vigente, usada em TODA parte (compra, Detalhes, Vendas do CD):
+    // a coluna PROJEÇÃO UNDS da planilha (dias úteis); só cai em dias corridos se ela não vier.
+    const projCorridos = p.diasCorridos > 0 ? (p.vendaParcial / p.diasCorridos) * 30 : p.vendaParcial;
+    p.vendaParcialProjetada = (p.projecaoMes > 0) ? p.projecaoMes : projCorridos;
 
     // Venda média ponderada <= 0 não é déficit: é AUSÊNCIA DE SINAL. Acontece quando a
     // janela só tem devolução (média negativa, ex.: BA03) ou nenhuma venda na reserva
@@ -1016,21 +1124,26 @@ function agregarPorSKU(products, diasCorridos) {
                 vendas: [0, 0, 0, 0, 0],
                 vendasRS: [0, 0, 0, 0, 0],
                 vendaMedia: 0, vendaMediaRS: 0,
+                projecaoMes: 0,     // soma das projeções por CD (mesma base da compra por CD)
                 estoqueLivre: 0, estoqueQualidade: 0, estoqueBloqueado: 0, estoqueTotal: 0,
                 estoqueLivreRS: 0, pendenciaTransito: 0, pendenciaEntrega: 0,
                 dataUltimaEntrada: '',
                 nCDs: 0,
                 cdsDeficit: [],
+                amPlanilha: null, amCount: 0,   // agregado não tem AM: recalcula ×30
+                _curvaVenda: -1,
                 diasCorridos
             };
         }
         const o = mapa[p.sku];
         o.nCDs++;
         o.pf = Math.max(o.pf, p.pf);
+        // Curva do SKU = curva do CD que MAIS vende esse SKU (antes era a do 1º CD lido, arbitrária)
+        if ((p.vendaMedia || 0) > o._curvaVenda) { o._curvaVenda = p.vendaMedia || 0; o.curva = p.curva; }
         for (let i = 0; i < 5; i++) { o.vendas[i] += p.vendas[i]; o.vendasRS[i] += p.vendasRS[i]; }
-        ['vendaMedia', 'vendaMediaRS', 'estoqueLivre', 'estoqueQualidade',
+        ['vendaMedia', 'vendaMediaRS', 'projecaoMes', 'estoqueLivre', 'estoqueQualidade',
             'estoqueBloqueado', 'estoqueTotal', 'estoqueLivreRS',
-            'pendenciaTransito', 'pendenciaEntrega'].forEach(k => { o[k] += p[k]; });
+            'pendenciaTransito', 'pendenciaEntrega'].forEach(k => { o[k] += (p[k] || 0); });
         if (p.dataUltimaEntrada && chaveData(p.dataUltimaEntrada) > chaveData(o.dataUltimaEntrada)) {
             o.dataUltimaEntrada = p.dataUltimaEntrada;
         }
@@ -1056,10 +1169,8 @@ let JANELA = [];
 // Ex.: "...base 12.06.26.xlsx" -> {dia:12, mes0:5, ano:2026}
 function parseDataArquivo(nomeArquivo) {
     const m = String(nomeArquivo || '').match(/(\d{1,2})[._\-\/](\d{1,2})[._\-\/](\d{2,4})/);
-    if (!m) {
-        const now = new Date();
-        return { dia: now.getDate(), mes0: now.getMonth(), ano: now.getFullYear() };
-    }
+    if (!m) return null;   // sem data: quem chama decide o fallback (nome da aba) — nunca "hoje"
+
     const dia = parseInt(m[1], 10);
     const mes0 = Math.min(11, Math.max(0, parseInt(m[2], 10) - 1));
     let ano = parseInt(m[3], 10);
@@ -1069,8 +1180,10 @@ function parseDataArquivo(nomeArquivo) {
 
 // Mantida por compatibilidade: dias corridos = dia do mês do arquivo
 function extrairDiasCorridos(nomeArquivo) {
-    return parseDataArquivo(nomeArquivo).dia;
+    return (parseDataArquivo(nomeArquivo) || {}).dia;
 }
+// Data da base (Date) — referência para "dias desde a última entrada" (não é a data de hoje)
+let DATA_BASE = null;
 
 // Nome (capitalizado) do mês vigente/parcial da janela ativa
 function mesVigenteNome() {
@@ -1146,7 +1259,7 @@ function rotuloProduto(p) {
     return p.material;
 }
 
-function consolidate(products, nomeArquivo, diasCorridos) {
+function consolidate(products, da, diasCorridos) {
     // Consolidação por CD
     const cdMap = {};
     products.forEach(p => {
@@ -1181,8 +1294,7 @@ function consolidate(products, nomeArquivo, diasCorridos) {
         c.diasMedios = c.vendaMediaTotal > 0 ? (c.estoqueLivreTotal / c.vendaMediaTotal) * 30 : 0;
     });
 
-    // Data de referência (corrige ano de 2 ou 4 dígitos)
-    const da = parseDataArquivo(nomeArquivo);
+    // Data de referência (já resolvida em processWorkbook: arquivo ou nome da aba)
     const dataReferencia = `${String(da.dia).padStart(2, '0')}/${String(da.mes0 + 1).padStart(2, '0')}/${da.ano}`;
 
     return {
@@ -1402,7 +1514,8 @@ function updateKPIs() {
     // Faixa por COBERTURA LIVRE < 45 dias (a meta). 45-60d fica de fora: está acima da
     // meta, é saudável. Inclui "reposicao" com cobertura livre < 45 (livre baixo, já coberto
     // pelo que vem): a faixa mede capital por cobertura livre, então pertence aqui.
-    const estCompra = prods.filter(p => (p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao') && p.diasLivre < DIAS_MIN_SAUDAVEL)
+    // Itens "em reposição" ficam FORA: o próprio dashboard diz que não precisam de compra.
+    const estCompra = prods.filter(p => (p.status === 'deficit' || p.status === 'saudavel') && p.diasLivre < DIAS_MIN_SAUDAVEL)
         .reduce((s, p) => s + p.estoqueLivreRS, 0);
     const estAtencao = prods.filter(p => p.status === 'excesso').reduce((s, p) => s + p.estoqueLivreRS, 0);
     const estProblema = prods.filter(p => p.status === 'sem-giro').reduce((s, p) => s + p.estoqueLivreRS, 0);
@@ -1865,7 +1978,7 @@ function memoriaCompra(p, metaOverride) {
     // Saída que ainda resta até o fim do mês (projeção cheia − o já vendido no mês).
     const restoMes = projMes - p.vendaParcial;
     // Posição projetada para o fim do mês: Estoque Total de hoje (livre + qualidade +
-    // bloqueado + trânsito + entrega) menos a saída restante. É a base prospectiva que a
+    // trânsito + entrega; o Bloqueado NÃO entra no Total da planilha) menos a saída restante. É a base prospectiva que a
     // sugestão desconta — não a foto atual de estoque livre.
     const estoqueProjFim = p.estoqueTotal - restoMes;
     const comprarBruto = Math.max(0, necessario - estoqueProjFim);
@@ -1936,7 +2049,7 @@ function explicacaoCompra(p) {
     const mesesCheiosTxt = JANELA.slice(0, 4).map(m => m.cap).join('–');
 
     const jaCoberto = comprarBruto <= 0 && !pisoMinimo;
-    const caminhoNota = aCaminho > 0 ? ` (inclui ${r(aCaminho)} un a caminho — trânsito + entrega — já dentro do total)` : '';
+    const caminhoNota = aCaminho > 0 ? ` (livre + qualidade + ${r(aCaminho)} un a caminho — trânsito + entrega — já dentro do total; bloqueado fica fora)` : ' (livre + qualidade; bloqueado fica fora)';
 
     const formulaBruto = jaCoberto
         ? `Necessidade líquida = ${r(necessario)} − ${r(estoqueProjFim)} = <strong>${r(necessario - estoqueProjFim)} un</strong> → <strong style="color:var(--saudavel);">0 un a comprar</strong>. A posição projetada de fim de mês já cobre a meta de ${diasMeta} dias (cobertura ≈ ${diasFuturo.toFixed(0)} dias).`
@@ -2110,7 +2223,8 @@ function diasDesde(dataStr) {
     if (!m) return null;
     const ano = m[3].length <= 2 ? 2000 + (+m[3]) : +m[3];
     const dt = new Date(ano, (+m[2]) - 1, +m[1]);
-    return isNaN(dt) ? null : Math.max(0, Math.round((Date.now() - dt.getTime()) / 86400000));
+    const ref = DATA_BASE instanceof Date && !isNaN(DATA_BASE) ? DATA_BASE.getTime() : Date.now();
+    return isNaN(dt) ? null : Math.max(0, Math.round((ref - dt.getTime()) / 86400000));
 }
 
 // dd/mm/aaaa (ou -, .) -> aaaammdd numérico, p/ comparar datas de verdade
@@ -2155,24 +2269,25 @@ function calcularRitmo(p) {
     else if (vm > 0) estrutura = 'ruptura';          // zerado, nada vindo, mas vende
     else estrutura = 'sem-giro';                     // sem venda: cobertura indefinida
 
-    // Camada 3: veredito (acima / no ritmo / abaixo)
-    // Risco de FALTA unificado: havendo reposição a caminho, o piso de cobertura é medido
-    // sobre o pipeline (livre + a caminho), não só sobre o livre de hoje. Assim com-estoque
-    // passa a enxergar a reposição igual ao em-fluxo. O EXCESSO continua olhando só o que já
-    // está parado na mão (livre), porque o que vem a caminho ainda não é estoque travado.
+    // Camada 3: veredito (acima / no ritmo / abaixo) — derivado da MESMA conta da aba
+    // Sugestões (memoriaCompra). Antes o Ritmo usava "livre + a caminho ≥ 45 d" e a Sugestões
+    // usava a posição projetada de fim de mês; as duas discordavam em centenas de itens
+    // (etiqueta "Em reposição" com compra > 0 na mesma linha). Agora:
+    //   - "Demanda acima" = a compra líquida é positiva (a posição projetada não sustenta a meta);
+    //   - "No ritmo"      = compra 0 e estoque na mão não passa do teto;
+    //   - "Estoque sobrando" = cobertura na mão acima do teto (só o que já está parado conta).
+    const mc = memoriaCompra(p);
+    const compra = mc.comprar || 0;
     let veredito;
     if (estrutura === 'sem-giro') veredito = 'sem-giro';
     else if (estrutura === 'ruptura') veredito = 'acima';
-    else if (estrutura === 'em-fluxo') veredito = cobCaminho < PISO ? 'acima' : 'ritmo';
+    else if (estrutura === 'em-fluxo') veredito = compra > 0 ? 'acima' : 'ritmo';
     else if (cobAtual > TETO) veredito = 'abaixo';
-    else {
-        const cobEfetiva = aCaminho > 0 ? cobCaminho : cobAtual;
-        veredito = cobEfetiva < PISO ? 'acima' : 'ritmo';
-    }
+    else veredito = compra > 0 ? 'acima' : 'ritmo';
 
-    // "Em reposição": estoque na mão magro hoje (abaixo do piso), mas o que vem a caminho
-    // recompõe a cobertura até o piso. Não é caso de compra, é de monitorar a entrega.
-    // Equivale à sugestão = 0 (livre + a caminho já cobre RITMO_META_DIAS, que é igual a PISO).
+    // "Em reposição": estoque na mão magro hoje (abaixo do piso), mas a posição projetada de
+    // fim de mês — que já inclui o que vem a caminho — cobre a meta (compra = 0). Não é caso de
+    // compra, é de monitorar a entrega. Por construção, NUNCA aparece com compra > 0.
     const emReposicao = aCaminho > 0 && veredito === 'ritmo' && cobAtual < PISO;
 
     const diasSemEntrada = diasDesde(p.dataUltimaEntrada);
@@ -2187,7 +2302,7 @@ function calcularRitmo(p) {
 
     return {
         estrutura, tendencia, varTend, veredito, emReposicao, sBase, sRec, aCaminho,
-        cobAtual, cobCaminho, diasSemEntrada, prioridade
+        cobAtual, cobCaminho, diasSemEntrada, prioridade, compra, mc
     };
 }
 
@@ -2218,7 +2333,7 @@ function updateRitmo() {
 
     // Calcula o ritmo de todos com giro (sem venda não tem cobertura definida).
     // Já anexa a sugestão de compra (meta 45) para permitir ordenar por ela.
-    const todos = prods.map(p => ({ p, r: calcularRitmo(p), compra: memoriaCompra(p, RITMO_META_DIAS).comprar || 0 }))
+    const todos = prods.map(p => { const r = calcularRitmo(p); return { p, r, compra: r.compra }; })
         .filter(o => o.r.veredito !== 'sem-giro');
 
     const acima = todos.filter(o => o.r.veredito === 'acima');
@@ -2262,10 +2377,10 @@ function updateRitmo() {
     const escopo = sc ? ('Santa Cruz (todos os CDs)' + (filtroCD.size ? ' · filtro de CD não se aplica aqui' : ''))
         : (filtroCD.size === 0 ? 'todos os CDs' : (filtroCD.size === 1 ? `CD ${[...filtroCD][0]}` : `${filtroCD.size} CDs`));
     const introMap = {
-        acima: `<strong>Demanda reprimida</strong>: a venda supera o estoque livre, cobertura abaixo de ${DIAS_MIN_SAUDAVEL} dias, e o que vem a caminho (se vem) não cobre. Risco de ruptura, prioridade de compra. A sugestão repõe até ${RITMO_META_DIAS} dias, já descontando o que vem. Os mais reprimidos primeiro.`,
-        reposicao: `<strong>Em reposição</strong>: estoque na mão magro hoje (abaixo de ${DIAS_MIN_SAUDAVEL} dias), mas a reposição a caminho já recompõe a meta. Não é compra, é monitorar a entrega: se atrasar, vira ruptura. Os mais magros hoje primeiro.`,
-        abaixo: `<strong>Estoque sobrando</strong>: cobertura acima de ${RITMO_TETO_DIAS} dias. Capital parado, avaliar frear reposição. Maior cobertura primeiro.`,
-        ritmo: `<strong>No ritmo</strong>: cobertura entre ${DIAS_MIN_SAUDAVEL} e ${RITMO_TETO_DIAS} dias com o estoque na mão. Equilibrado, sem ação.`,
+        acima: `<strong>Demanda reprimida</strong>: a posição projetada de fim de mês (estoque total, já com o que vem a caminho, menos a saída que ainda resta) não sustenta a meta de ${metaDiasGlobal} dias — a compra líquida é positiva. Risco de ruptura, prioridade de compra. Mesma conta da aba Sugestões. Os mais reprimidos primeiro.`,
+        reposicao: `<strong>Em reposição</strong>: estoque na mão magro hoje (abaixo de ${DIAS_MIN_SAUDAVEL} dias), mas o que vem a caminho já cobre a meta de ${metaDiasGlobal} dias (compra 0). Não é compra, é monitorar a entrega: se atrasar, vira ruptura. Os mais magros hoje primeiro.`,
+        abaixo: `<strong>Estoque sobrando</strong>: cobertura na mão acima de ${RITMO_TETO_DIAS} dias. Capital parado, avaliar frear reposição. Maior cobertura primeiro.`,
+        ritmo: `<strong>No ritmo</strong>: compra 0 e cobertura na mão de até ${RITMO_TETO_DIAS} dias. Equilibrado, sem ação.`,
         tudo: 'Todos os produtos com giro, do mais reprimido ao mais parado.'
     };
     const intro = `<div class="rec-intro">${introMap[foco] || introMap.acima}<br><strong>${lista.length} ${noun}</strong> em ${escopo}.</div>`;
@@ -2374,7 +2489,7 @@ function renderRitmoTable(lista, hideCD, sc) {
 
         // Compra (coluna da direita): a sugestão, sempre em azul. Mesma conta da aba Sugestões
         // (meta de 45 dias, descontando a posição projetada de fim de mês). Zero fica apagado.
-        const mc = memoriaCompra(p, RITMO_META_DIAS);
+        const mc = r.mc || memoriaCompra(p);
         const compra = mc.comprar || 0;
         const projFimTxt = Math.round(mc.estoqueProjFim).toLocaleString('pt-BR');
         const compraTip = compra > 0
@@ -2450,22 +2565,22 @@ function explicacaoRitmo(p, r) {
     if (r.estrutura === 'ruptura') {
         kw = 'Ruptura'; txt = `livre zerado e nada a caminho; vende ${fmt(p.vendaMedia)}/mês.`;
     } else if (r.emReposicao) {
-        kw = 'Em reposição'; txt = `livre cobre só ${fmt(r.cobAtual)} d hoje, mas o que vem a caminho recompõe ${fmt(r.cobCaminho)} d (acima de ${DIAS_MIN_SAUDAVEL}). Monitorar a entrega.`;
+        kw = 'Em reposição'; txt = `livre cobre só ${fmt(r.cobAtual)} d hoje, mas com o que vem a caminho a posição projetada de fim de mês cobre a meta (compra 0). Monitorar a entrega.`;
     } else if (r.veredito === 'acima' && r.aCaminho > 0) {
-        kw = 'Reposição insuficiente'; txt = `livre cobre ${fmt(r.cobAtual)} d e o que vem leva só a ${fmt(r.cobCaminho)} d (abaixo de ${DIAS_MIN_SAUDAVEL}). A reposição não acompanha.`;
+        kw = 'Reposição insuficiente'; txt = `livre cobre ${fmt(r.cobAtual)} d; mesmo com o que vem a caminho a posição projetada de fim de mês não sustenta a meta — faltam ${fmt(r.compra)} un.`;
     } else if (r.veredito === 'acima') {
-        kw = dir || 'Reprimida'; txt = `a saída supera o estoque livre; cobertura abaixo de ${DIAS_MIN_SAUDAVEL} d e nada a caminho.`;
+        kw = dir || 'Reprimida'; txt = `a posição projetada de fim de mês não sustenta a meta e nada vem a caminho — faltam ${fmt(r.compra)} un.`;
     } else if (r.veredito === 'abaixo') {
         kw = dir || 'Sobrando'; txt = `estoque sobrando para o giro; cobertura acima de ${RITMO_TETO_DIAS} d.`;
     } else if (r.veredito === 'sem-giro') {
         kw = 'Sem giro'; txt = `sem venda na janela; cobertura indefinida.`;
     } else {
-        kw = dir || 'No ritmo'; txt = `entrada e saída equilibradas; cobertura na faixa ${DIAS_MIN_SAUDAVEL}–${RITMO_TETO_DIAS} d.`;
+        kw = dir || 'No ritmo'; txt = `entrada e saída equilibradas; compra 0 e cobertura na mão de até ${RITMO_TETO_DIAS} d.`;
     }
     const verdHtml = `<div class="rit-verd" style="border-left-color:${cor};"><b style="color:${cor};">${kw}</b> · ${txt}</div>`;
 
     // 3) Compra: a conta inteira em uma linha (descontando a projeção de fim de mês).
-    const mc = memoriaCompra(p, RITMO_META_DIAS);
+    const mc = r.mc || memoriaCompra(p);
     const base = `meta ${mc.diasMeta} d → ${fmt(mc.necessario)} un · projeção fim do mês ${fmt(mc.estoqueProjFim)} (total ${fmt(p.estoqueTotal)} − ${fmt(mc.restoMes)} resto)`;
     let compraV;
     if (mc.comprar <= 0) {
@@ -2844,7 +2959,7 @@ function detailBlockHtml(p) {
     }));
 
     const chartUn = createBarChartSimple(hist.map(h => h.mes), hist.map(h => h.qtde), '#3b82f6') +
-        `<p class="chart-note">* ${mesVigenteNome()} parcial (até dia ${dashboardData.diasCorridos}). Projeção mês cheio: <strong>${Math.round(p.vendaParcialProjetada)} un</strong></p>`;
+        `<p class="chart-note">* ${mesVigenteNome()} parcial (até dia ${dashboardData.diasCorridos}). Projeção mês cheio: <strong>${Math.round(p.vendaParcialProjetada).toLocaleString('pt-BR')} un</strong> (coluna PROJEÇÃO, dias úteis — a mesma usada na compra)</p>`;
     const chartRS = createBarChartSimple(hist.map(h => h.mes), hist.map(h => h.valor), '#10b981', true);
 
     const memo = memoriaCompra(p);
@@ -3201,8 +3316,8 @@ function renderVendasCDDetalhe() {
 function blocoVendasCD(titulo, un, rs, destaque, prods) {
     const labels = JANELA.map(m => m.abbr + (m.parcial ? '*' : ''));
     const dias = dashboardData.diasCorridos || 0;
-    const parcial = un[4];
-    const proj = dias > 0 ? Math.round(parcial / dias * 30) : Math.round(parcial);
+    // Projeção do mês = soma da mesma projeção por produto que a compra usa (coluna PROJEÇÃO).
+    const proj = Math.round((prods || []).reduce((s, p) => s + (p.vendaParcialProjetada || 0), 0));
     const media4 = Math.round((un[0] + un[1] + un[2] + un[3]) / 4);
     const mediaRS4 = (rs[0] + rs[1] + rs[2] + rs[3]) / 4;
 
@@ -3279,7 +3394,7 @@ function agregarNumeros(prods) {
         capTotal += p.estoqueLivreRS;
         if (p.status === 'excesso') capAtencao += p.estoqueLivreRS;
         else if (p.status === 'sem-giro') capProblema += p.estoqueLivreRS;
-        if (p.status === 'deficit' || p.status === 'saudavel' || p.status === 'reposicao') capCompra += p.estoqueLivreRS;
+        if (p.status === 'deficit' || p.status === 'saudavel') capCompra += p.estoqueLivreRS;   // reposição fica fora
         cont[p.status] = (cont[p.status] || 0) + 1;
         const r = recompraDe(p);
         if (r.un > 0) {
@@ -3553,6 +3668,7 @@ function montarSnapshot() {
     // tela. Assim duas bases são sempre comparadas no mesmo prazo. Restaura no fim.
     const metaSalva = metaDiasGlobal;
     metaDiasGlobal = META_REF_COMPARATIVO;
+    META_FORCADA = META_REF_COMPARATIVO;   // sobrepõe também os ajustes por linha
     let snap;
     try {
         const tot = agregarNumeros(prods);
@@ -3591,6 +3707,7 @@ function montarSnapshot() {
         };
     } finally {
         metaDiasGlobal = metaSalva;          // devolve a meta da tela
+        META_FORCADA = null;
     }
     return snap;
 }
@@ -4542,12 +4659,13 @@ function exportarExcel() {
     // ou seja, o mesmo alvo usado no cálculo da sugestão e exibido na coluna Meta Cobertura.
     // Itens com dias de estoque ACIMA da meta ficam de fora, junto com faltas na Supera e
     // itens sem sugestão.
-    const paraCompra = lista.filter(p => {
-        const mc = memoriaCompra(p);
-        return mc.comprar > 0 && Math.round(p.diasLivre) <= mc.diasMeta;
-    });
+    // Exporta EXATAMENTE o que está em tela com sugestão de compra > 0 — sem corte adicional
+    // por dias de estoque. Antes, itens 45–60 d com compra > 0 (o "top-up" que o Cockpit conta
+    // como necessidade) apareciam na aba Sugestões mas sumiam do Excel. Para restringir, use os
+    // filtros/"Focar em" da aba antes de exportar.
+    const paraCompra = lista.filter(p => memoriaCompra(p).comprar > 0);
     if (paraCompra.length === 0) {
-        alert('Nenhum produto com sugestão de compra e dias de estoque dentro da meta nos filtros atuais. Nada a exportar.');
+        alert('Nenhum produto com sugestão de compra nos filtros atuais. Nada a exportar.');
         return;
     }
 
