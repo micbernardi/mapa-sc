@@ -4698,29 +4698,40 @@ function renderAlvoParams() {
 // livre do CD chegar à META (padrão 30 d) até o fim do mês. Mostra a necessidade de compra hoje
 // (régua do CD, padrão 45 d — mesma conta da aba Sugestões) e a necessidade SE a equipe vender.
 // A diferença é o que a força-tarefa gera.
+// Sempre devolve o objeto (nunca esconde o produto). `naLista` = entra na força-tarefa;
+// `obs` = por que não entra (vazio quando entra).
 function calcularForcaTarefa(p) {
     const vm = p.vendaMedia || 0;
-    if (p.emFalta || vm <= 0 || p.status === 'parado' || vm < alvoGiroMin) return null;
     const livre = p.estoqueLivre || 0;
     const aCaminho = (p.pendenciaTransito || 0) + (p.pendenciaEntrega || 0);
-    const estoqueMeta = vm * alvoMetaFT / 30;
-    if (livre <= estoqueMeta) return null;                    // já está na meta ou abaixo hoje
+    const pf = p.pf || 0;
+    const base = { p, vm, livre, aCaminho, dias: p.diasLivre || 0, normal: 0, extra: null, pct: null,
+        hojeUn: 0, hojeRS: 0, seUn: 0, seRS: 0, ganhoRS: 0, naLista: false, obs: '' };
+    if (p.emFalta) { base.obs = 'em falta na Supera'; return base; }
+    if (vm <= 0) { base.obs = 'sem venda média'; base.dias = 0; return base; }
     const mc = memoriaCompra(p, alvoSaudavel);
+    base.hojeUn = mc.comprar || 0; base.hojeRS = base.hojeUn * pf;
+    base.seUn = base.hojeUn; base.seRS = base.hojeRS;
+    const estoqueMeta = vm * alvoMetaFT / 30;
     const normal = Math.max(0, mc.restoMes || 0);             // venda até o fim do mês no ritmo atual
+    base.normal = normal;
+    if (p.status === 'parado') { base.obs = 'parado (sem venda no último mês cheio nem no atual)'; return base; }
+    if (livre <= estoqueMeta) { base.obs = `já está abaixo de ${alvoMetaFT} d`; return base; }
     const extra = Math.max(0, (livre - estoqueMeta) - normal);
     const pct = normal > 0 ? extra / normal * 100 : (extra > 0 ? Infinity : 0);
-    if (pct > alvoTeto) return null;                          // esforço fora do alcance neste mês
+    base.extra = extra; base.pct = pct;
     // Necessidade SE a equipe vender: posição de fim de mês cai pelo extra vendido
     const posFim = (mc.estoqueProjFim || 0) - extra;
     const faltaSe = Math.max(0, vm * alvoSaudavel / 30 - posFim);
     const mult = ajustarAoMultiplo(p, faltaSe);
     let seUn = mult.ajustado;
     if (faltaSe > 0 && mult.temMultiplo && seUn < mult.multiplo) seUn = mult.multiplo;
-    const hojeUn = mc.comprar || 0;
-    seUn = Math.max(seUn, hojeUn);                             // vender mais nunca reduz a necessidade
-    const pf = p.pf || 0;
-    return { p, vm, livre, aCaminho, dias: p.diasLivre || 0, normal, extra, pct,
-        hojeUn, hojeRS: hojeUn * pf, seUn, seRS: seUn * pf, ganhoRS: (seUn - hojeUn) * pf };
+    seUn = Math.max(seUn, base.hojeUn);                       // vender mais nunca reduz a necessidade
+    base.seUn = seUn; base.seRS = seUn * pf; base.ganhoRS = (seUn - base.hojeUn) * pf;
+    if (vm < alvoGiroMin) base.obs = `giro abaixo de ${alvoGiroMin} un/mês`;
+    else if (pct > alvoTeto) base.obs = `esforço de +${isFinite(pct) ? Math.round(pct) : '∞'}% (acima do teto de ${alvoTeto}%)`;
+    else base.naLista = true;
+    return base;
 }
 
 function updateAlvo() {
@@ -4732,20 +4743,26 @@ function updateAlvo() {
     let prods = originalProducts;
     if (filtroCD.size) prods = prods.filter(p => filtroCD.has(p.cd));
     if (filtroCurva.size) prods = prods.filter(p => filtroCurva.has(p.curva));
-    const lista = prods.map(calcularForcaTarefa).filter(Boolean).sort((a, b) => b.seRS - a.seRS);
+    const todosCalc = prods.map(calcularForcaTarefa);
+    const forca = todosCalc.filter(o => o.naLista).sort((a, b) => b.seRS - a.seRS);
+    const modo = (document.getElementById('alvoModo') || {}).value || 'forca';
+    const lista = modo === 'todos'
+        ? todosCalc.slice().sort((a, b) => (b.naLista - a.naLista) || (b.seRS - a.seRS) || (a.dias - b.dias))
+        : forca;
     alvoListaAtual = lista;
-    const soma = k => lista.reduce((s, o) => s + o[k], 0);
+    const soma = k => forca.reduce((s, o) => s + o[k], 0);
     if (kpisEl) kpisEl.innerHTML = `<div class="alvo-kpis">
-        <div class="alvo-kpi isca"><div class="alvo-kpi-val">${lista.length}</div><div class="alvo-kpi-lbl">produtos na força-tarefa · vender ${Math.round(soma('extra')).toLocaleString('pt-BR')} un a mais até o fim do mês</div></div>
+        <div class="alvo-kpi isca"><div class="alvo-kpi-val">${forca.length}</div><div class="alvo-kpi-lbl">produtos na força-tarefa · vender ${Math.round(soma('extra')).toLocaleString('pt-BR')} un a mais até o fim do mês</div></div>
         <div class="alvo-kpi fora"><div class="alvo-kpi-val">${formatBRLCheio(soma('hojeRS'))}</div><div class="alvo-kpi-lbl">necessidade de compra <strong>hoje</strong></div></div>
         <div class="alvo-kpi pedido"><div class="alvo-kpi-val">${formatBRLCheio(soma('seRS'))}</div><div class="alvo-kpi-lbl">necessidade de compra <strong>se a equipe vender</strong> · +${formatBRLCheio(soma('ganhoRS'))}</div></div>
     </div>`;
     const intro = `<div class="rec-intro">Vendendo a quantidade indicada <strong>além do ritmo normal</strong> até o fim do mês, o estoque do CD cai para <strong>${alvoMetaFT} dias</strong>. A necessidade de compra é calculada para o CD voltar a <strong>${alvoSaudavel} dias</strong> (mesma conta da aba Sugestões, em caixas inteiras, já descontando o que está a caminho). <strong>0 un</strong> = chega a ${alvoMetaFT} dias só com a venda normal.</div>`;
-    if (!lista.length) { container.innerHTML = intro + '<div class="empty-state">Nenhum produto dentro dos critérios.</div>'; return; }
-    container.innerHTML = intro + renderAlvoTable(lista, filtroCD.size === 1);
+    const introModo = modo === 'todos' ? `<div class="rec-intro" style="border-left-color:var(--text-secondary);">Mostrando <strong>todos os ${lista.length} produtos</strong>. Os da força-tarefa vêm primeiro; os demais trazem na coluna <strong>Observação</strong> o motivo de terem ficado fora. Os números valem para todos.</div>` : '';
+    if (!lista.length) { container.innerHTML = intro + introModo + '<div class="empty-state">Nenhum produto dentro dos critérios.</div>'; return; }
+    container.innerHTML = intro + introModo + renderAlvoTable(lista, filtroCD.size === 1, modo === 'todos');
 }
 
-function renderAlvoTable(lista, hideCD) {
+function renderAlvoTable(lista, hideCD, comObs) {
     const r0 = n => Math.round(n).toLocaleString('pt-BR');
     const sub = t => `<div style="font-size:0.72rem;color:var(--text-secondary);">${t}</div>`;
     const rows = lista.map((o, idx) => `
@@ -4756,9 +4773,10 @@ function renderAlvoTable(lista, hideCD) {
             <td><span class="curva-badge curva-${o.p.curva}">${o.p.curva}</span></td>
             <td style="text-align:right;">${Math.round(o.dias)} d</td>
             <td style="text-align:right;">${o.aCaminho > 0 ? `<span style="color:#0891b2;font-weight:600;">${r0(o.aCaminho)}</span>` : '<span style="color:#cbd5e1;">—</span>'}</td>
-            <td style="text-align:right;">${o.extra > 0 ? `<span class="alvo-extra">${r0(o.extra)} un</span>` : '<span class="alvo-extra zero">0 · chega sozinho</span>'}</td>
+            <td style="text-align:right;">${o.extra === null ? '<span style="color:#cbd5e1;">—</span>' : o.extra > 0 ? `<span class="alvo-extra${o.naLista ? '' : ' alto'}">${r0(o.extra)} un</span>` : '<span class="alvo-extra zero">0 · chega sozinho</span>'}</td>
             <td style="text-align:right;">${o.hojeUn > 0 ? formatBRLCheio(o.hojeRS) + sub(r0(o.hojeUn) + ' un') : '<span style="color:#cbd5e1;">—</span>'}</td>
-            <td style="text-align:right;"><strong style="color:var(--primary);">${formatBRLCheio(o.seRS)}</strong>${sub(r0(o.seUn) + ' un')}</td>
+            <td style="text-align:right;">${o.seUn > 0 ? `<strong style="color:var(--primary);">${formatBRLCheio(o.seRS)}</strong>${sub(r0(o.seUn) + ' un')}` : '<span style="color:#cbd5e1;">—</span>'}</td>
+            ${comObs ? `<td style="font-size:0.8rem;color:var(--text-secondary);">${o.naLista ? '<span class="status-badge isca">força-tarefa</span>' : escapeHtml(o.obs)}</td>` : ''}
         </tr>`).join('');
     const th = (l, al, t) => `<th style="text-align:${al};"${t ? ` title="${t}"` : ''}>${l}</th>`;
     return `
@@ -4774,6 +4792,7 @@ function renderAlvoTable(lista, hideCD) {
                 ${th(`Vender a mais p/ ${alvoMetaFT} d`, 'right', `Unidades além da venda normal, até o fim do mês, para o estoque livre do CD chegar a ${alvoMetaFT} dias`)}
                 ${th('Necessita comprar hoje', 'right', `Compra para fechar o mês com ${alvoSaudavel} dias, sem esforço extra`)}
                 ${th('Necessitará comprar se vender', 'right', `Compra para voltar a ${alvoSaudavel} dias se a equipe vender a quantidade indicada`)}
+                ${comObs ? th('Observação', 'left') : ''}
             </tr></thead>
             <tbody>${rows}</tbody>
         </table>
@@ -4787,19 +4806,20 @@ function exportarAlvoExcel() {
     const linhas = alvoListaAtual.map(o => ({
         'CD': o.p.cd, 'Material': o.p.material, 'SAP': limpa(o.p.codigoSAP), 'Curva': o.p.curva,
         'Estoque Hoje (dias)': Math.round(o.dias), 'Já a Caminho (un)': Math.round(o.aCaminho),
-        [`Vender a Mais p/ ${alvoMetaFT} dias (un)`]: Math.round(o.extra),
+        [`Vender a Mais p/ ${alvoMetaFT} dias (un)`]: o.extra === null ? '' : Math.round(o.extra),
         'Necessita Comprar Hoje (un)': Math.round(o.hojeUn), 'Necessita Comprar Hoje (R$ PF)': +o.hojeRS.toFixed(2),
-        'Necessitará Comprar se Vender (un)': Math.round(o.seUn), 'Necessitará Comprar se Vender (R$ PF)': +o.seRS.toFixed(2)
+        'Necessitará Comprar se Vender (un)': Math.round(o.seUn), 'Necessitará Comprar se Vender (R$ PF)': +o.seRS.toFixed(2),
+        'Observação': o.naLista ? 'força-tarefa' : o.obs
     }));
     const ws = XLSX.utils.json_to_sheet(linhas);
     const n = Object.keys(linhas[0]).length, col = XLSX.utils.encode_col;
-    ws['!cols'] = [8, 40, 10, 7, 12, 12, 16, 14, 16, 16, 18].map(w => ({ wch: w }));
+    ws['!cols'] = [8, 40, 10, 7, 12, 12, 16, 14, 16, 16, 18, 34].map(w => ({ wch: w }));
     ws['!autofilter'] = { ref: `A1:${col(n - 1)}${linhas.length + 1}` };
     ws['!rows'] = [{ hpt: 32 }];
     for (let c = 0; c < n; c++) { const cel = ws[col(c) + '1']; if (cel) cel.s = (c <= 1) ? XLS_HEADER_LEFT : XLS_HEADER; }
     const azul = { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } };
     const est = [xlsEstiloTexto('left'), xlsEstiloTexto('left', true), xlsEstiloTexto('center'), null, xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_INT),
-        azul, xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_BRL), xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } }];
+        azul, xlsEstiloNum(FMT_INT), xlsEstiloNum(FMT_BRL), xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } }, xlsEstiloTexto('left')];
     alvoListaAtual.forEach((o, i) => {
         const r = i + 2;
         est.forEach((s, c) => { const cel = ws[col(c) + r]; if (cel && s) cel.s = s; });
@@ -4810,11 +4830,12 @@ function exportarAlvoExcel() {
     XLSX.utils.book_append_sheet(wb, ws, 'Força-tarefa');
     const ref = String(dashboardData.dataReferencia || '').replace(/\//g, '-');
     const cdTxt = filtroCD.size === 1 ? [...filtroCD][0].replace(/[^\w-]/g, '') : 'TodosCDs';
-    baixarExcelComCongelamento(wb, `Forca_Tarefa_${cdTxt}_meta${alvoMetaFT}d_${ref || 'export'}.xlsx`, 'C2');
+    const modoTxt = ((document.getElementById('alvoModo') || {}).value === 'todos') ? 'Todos' : 'Forca_Tarefa';
+    baixarExcelComCongelamento(wb, `${modoTxt}_${cdTxt}_meta${alvoMetaFT}d_${ref || 'export'}.xlsx`, 'C2');
 }
 
 // Listeners dos seletores da aba
-['alvoFilter', 'alvoSort'].forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('change', updateAlvo); });
+['alvoModo', 'alvoFilter', 'alvoSort'].forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('change', updateAlvo); });
 
 function handleTabClick(e) {
     const tab = e.target.getAttribute('data-tab');
@@ -5108,7 +5129,7 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-const SCRIPT_VERSAO = '2026-10-21m';
+const SCRIPT_VERSAO = '2026-10-21n';
 console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
 
 // ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html
