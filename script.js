@@ -4568,7 +4568,16 @@ const ALVO_TETO_PADRAO = 50;       // esforço extra máximo (% sobre a venda no
 const ALVO_SAUDAVEL_PADRAO = 45;   // cobertura que o CD considera saudável: ao comprar, repõe até aqui
 const ALVO_INFLADA = 0.75;
 const ALVO_GIRO_MIN_PADRAO = 100;  // venda média mínima (un/mês) para entrar na força-tarefa
-let alvoGiroMin = ALVO_GIRO_MIN_PADRAO;         // venda dos 2 últimos meses fechados < 75% da média → média inflada
+let alvoGiroMin = ALVO_GIRO_MIN_PADRAO;
+const ALVO_META_FT_PADRAO = 30;    // até quantos dias de estoque a força-tarefa quer levar o CD
+let alvoMetaFT = ALVO_META_FT_PADRAO;
+// Venda extra (além do ritmo normal até o fim do mês) para o estoque livre do CD chegar à meta da
+// força-tarefa. 0 = chega sozinho; null = já está na meta ou abaixo hoje.
+function vendaParaMetaFT(o) {
+    const estoqueMeta = o.vm * alvoMetaFT / 30;
+    if (o.livre <= estoqueMeta) return null;
+    return Math.max(0, (o.livre - estoqueMeta) - (o.normal || 0));
+}         // venda dos 2 últimos meses fechados < 75% da média → média inflada
 let alvoSaudavel = ALVO_SAUDAVEL_PADRAO;
 let alvoGatilho = ALVO_GATILHO_PADRAO;
 let alvoTeto = ALVO_TETO_PADRAO;
@@ -4658,6 +4667,9 @@ function renderAlvoParams() {
         <label>CD compra abaixo de
             <input type="number" id="alvoSaudavelInp" class="rec-bulk-input" min="7" max="180" step="1" value="${alvoSaudavel}" title="Estoque saudável da distribuidora: abaixo disso ela compra (padrão 45)"> dias
         </label>
+        <label>Meta da força-tarefa
+            <input type="number" id="alvoMetaFTInp" class="rec-bulk-input" min="0" max="180" step="1" value="${alvoMetaFT}" title="Até quantos dias de estoque a equipe quer levar o CD (coluna Vender a mais da lista Cobrar pedido; padrão 30)"> dias
+        </label>
         <label>Giro mínimo
             <input type="number" id="alvoGiroInp" class="rec-bulk-input" min="0" max="100000" step="10" value="${alvoGiroMin}" title="Venda média mínima (un/mês) para o item entrar na força-tarefa (padrão 100)"> un/mês
         </label>
@@ -4671,6 +4683,8 @@ function renderAlvoParams() {
         const sv = parseInt(document.getElementById('alvoSaudavelInp').value, 10);
         alvoSaudavel = isNaN(sv) ? ALVO_SAUDAVEL_PADRAO : Math.max(7, Math.min(180, sv));
         alvoGatilho = alvoSaudavel;   // régua única
+        const mf = parseInt(document.getElementById('alvoMetaFTInp').value, 10);
+        alvoMetaFT = isNaN(mf) ? ALVO_META_FT_PADRAO : Math.max(0, Math.min(180, mf));
         const gm = parseInt(document.getElementById('alvoGiroInp').value, 10);
         alvoGiroMin = isNaN(gm) ? ALVO_GIRO_MIN_PADRAO : Math.max(0, gm);
         alvoTeto = isNaN(t) ? ALVO_TETO_PADRAO : Math.max(0, Math.min(500, t));
@@ -4728,6 +4742,9 @@ function renderAlvoTable(lista, hideCD, foco) {
             <td style="text-align:right;">${Math.round(o.dias)} d</td>
             ${vender ? `<td style="text-align:right;">${o.extra > 0 ? `<span class="alvo-extra">${r0(o.extra)} un</span>` : '<span class="alvo-extra zero">0 · manter ritmo</span>'}</td>`
                      : `<td style="text-align:right;">${o.aCaminho > 0 ? `<span style="color:#0891b2;font-weight:600;">${r0(o.aCaminho)} un</span><div style="font-size:0.7rem;color:var(--text-secondary);">reforçar</div>` : '<span style="color:#cbd5e1;">—</span>'}</td>`}
+            ${vender ? '' : (() => { const v = vendaParaMetaFT(o);
+                return `<td style="text-align:right;">${v === null ? '<span style="color:var(--text-secondary);font-size:0.8rem;">já abaixo</span>'
+                    : v > 0 ? `<span class="alvo-extra">${r0(v)} un</span>` : '<span class="alvo-extra zero">0 · chega sozinho</span>'}</td>`; })()}
             <td style="text-align:right;"><strong style="color:var(--primary);">${formatBRLCheio(o.pedidoRS)}</strong><div style="font-size:0.72rem;color:var(--text-secondary);">${r0(o.pedidoUn)} un</div></td>
         </tr>`).join('');
     const th = (l, al, t) => `<th style="text-align:${al};"${t ? ` title="${t}"` : ''}>${l}</th>`;
@@ -4741,6 +4758,7 @@ function renderAlvoTable(lista, hideCD, foco) {
                 ${th('Curva', 'left')}
                 ${th('Estoque hoje', 'right', 'Dias de estoque livre hoje')}
                 ${vender ? th('Vender a mais até o fim do mês', 'right', 'Unidades além da venda normal para o estoque ficar abaixo da régua') : th('Já a caminho', 'right', 'Pedido já existente (trânsito + entrega). Quando há, Necessita Comprar é o reforço que ainda falta.')}
+                ${vender ? '' : th(`Vender a mais p/ ${alvoMetaFT} d`, 'right', `Unidades além da venda normal, até o fim do mês, para o estoque livre do CD chegar a ${alvoMetaFT} dias. Se houver algo a caminho, a entrega repõe o estoque.`)}
                 ${th(vender ? 'Necessitará Comprar' : 'Necessita Comprar', 'right', vender ? 'O que o CD vai precisar comprar quando o estoque cair abaixo da régua (caixas inteiras, a preço de fábrica)' : 'O que o CD precisa comprar para fechar o mês com estoque saudável (caixas inteiras, a preço de fábrica)')}
             </tr></thead>
             <tbody>${rows}</tbody>
@@ -4757,7 +4775,11 @@ function exportarAlvoExcel() {
     const linhas = alvoListaAtual.map(o => {
         const l = { 'CD': o.p.cd, 'Material': o.p.material, 'SAP': limpa(o.p.codigoSAP), 'Curva': o.p.curva, 'Estoque Hoje (dias)': Math.round(o.dias) };
         if (vender) l['Vender a Mais até o Fim do Mês (un)'] = Math.round(Math.max(0, o.extra));
-        else l['Já a Caminho (un)'] = Math.round(o.aCaminho);
+        else {
+            l['Já a Caminho (un)'] = Math.round(o.aCaminho);
+            const v = vendaParaMetaFT(o);
+            l[`Vender a Mais p/ ${alvoMetaFT} dias (un)`] = v === null ? 'já abaixo' : Math.round(v);
+        }
         const rot = vender ? 'Necessitará Comprar' : 'Necessita Comprar';
         l[rot + ' (un)'] = Math.round(o.pedidoUn);
         l[rot + ' (R$ PF)'] = +o.pedidoRS.toFixed(2);
@@ -4765,12 +4787,14 @@ function exportarAlvoExcel() {
     });
     const ws = XLSX.utils.json_to_sheet(linhas);
     const n = Object.keys(linhas[0]).length, col = XLSX.utils.encode_col;
-    ws['!cols'] = [8, 40, 10, 7, 14, vender ? 22 : 14, 14, 18].map(w => ({ wch: w }));
+    ws['!cols'] = (vender ? [8, 40, 10, 7, 14, 22, 14, 18] : [8, 40, 10, 7, 14, 14, 18, 14, 18]).map(w => ({ wch: w }));
     ws['!autofilter'] = { ref: `A1:${col(n - 1)}${linhas.length + 1}` };
     ws['!rows'] = [{ hpt: 30 }];
     for (let c = 0; c < n; c++) { const cel = ws[col(c) + '1']; if (cel) cel.s = (c <= 1) ? XLS_HEADER_LEFT : XLS_HEADER; }
     const est = [xlsEstiloTexto('left'), xlsEstiloTexto('left', true), xlsEstiloTexto('center'), null, xlsEstiloNum(FMT_INT),
-        { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } }, xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } }];
+        { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } }];
+    if (!vender) est.push({ ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } });
+    est.push(xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } });
     alvoListaAtual.forEach((o, i) => {
         const r = i + 2;
         est.forEach((s, c) => { const cel = ws[col(c) + r]; if (cel && s) cel.s = s; });
@@ -5079,7 +5103,7 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-const SCRIPT_VERSAO = '2026-10-21k';
+const SCRIPT_VERSAO = '2026-10-21l';
 console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
 
 // ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html
