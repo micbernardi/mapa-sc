@@ -4822,7 +4822,20 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-console.log('Dashboard pronto. SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
+const SCRIPT_VERSAO = '2026-10-21';
+console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
+
+// ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html
+// ignorando o cache local. Não muda nada nesta visita, mas garante que a PRÓXIMA abertura já
+// use a versão mais recente publicada — sem ninguém precisar limpar cache ou dar Ctrl+F5.
+// (Quem ainda está com um script anterior a esta versão precisa de um Ctrl+F5 uma única vez;
+// a partir daí a renovação passa a ser automática.)
+(function renovarCache() {
+    if (typeof fetch !== 'function' || location.protocol === 'file:') return;
+    ['script.js', 'style.css', 'index.html', './'].forEach(u => {
+        try { fetch(u, { cache: 'reload', credentials: 'same-origin' }).catch(() => {}); } catch (e) {}
+    });
+})();
 
 // Ao abrir o link, recarrega a última planilha salva (se houver). Some apenas em "Limpar Dados".
 (async function restaurarPlanilha() {
