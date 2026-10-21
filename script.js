@@ -4593,9 +4593,7 @@ function calcularAlvo(p) {
     if (p.emFalta) { base.motivo = 'em falta na Supera'; return base; }
     if (vm <= 0) { base.motivo = 'sem venda média'; return base; }
     if (p.status === 'parado') { base.motivo = 'parado (sem giro recente)'; return base; }
-    // Giro baixo: vende pouco demais para justificar esforço de campo (vale para todas as situações).
-    if (vm < alvoGiroMin) { base.classe = 'giro-baixo'; base.motivo = 'giro abaixo de ' + alvoGiroMin + ' un/mês'; return base; }
-    if (aCaminho > 0) { base.motivo = 'já tem reposição a caminho (' + aCaminho.toLocaleString('pt-BR') + ' un) — a entrega anula o esforço'; return base; }
+    base.giroBaixo = vm < alvoGiroMin;   // filtro só da lista "vender a mais" (esforço de campo)
     base.gatilhoUn = vm * alvoGatilho / 30;
     const mc = memoriaCompra(p);
     // Média inflada: os 2 últimos meses FECHADOS vendem bem menos que a média ponderada
@@ -4603,26 +4601,37 @@ function calcularAlvo(p) {
     base.recente = (Math.max(0, v[2]) + Math.max(0, v[3])) / 2;
     base.inflada = base.recente < vm * ALVO_INFLADA;
     base.diasReal = base.recente > 0 ? (livre / base.recente) * 30 : Infinity;
-    // Pedido = o que o CD compra para voltar ao estoque saudável a partir da cobertura em que fica
-    // no fim do mês (no radar/cai sozinho: a natural; isca/fora: o gatilho, se o esforço acontecer).
-    const pedidoDe = diasFimConsiderado => {
-        base.pedidoUn = Math.max(0, vm * (alvoSaudavel - diasFimConsiderado) / 30);
+    // Pedido gerado = a MESMA conta da aba Sugestões de Compra (memoriaCompra), com a régua como
+    // meta: posição projetada de fim de mês, arredondada por caixa de embarque, mínimo 1 caixa.
+    // Assim o valor bate 1:1 com o Excel da aba Sugestões exportado na mesma régua.
+    const pedidoSugestao = () => {
+        const m = memoriaCompra(p, alvoGatilho);
+        base.pedidoUn = m.comprar || 0;
         base.pedidoRS = base.pedidoUn * (p.pf || 0);
     };
-    // JÁ NO RADAR: estoque de hoje já está no gatilho ou abaixo. Não some da lista — vira caso de
-    // COBRANÇA à distribuidora (pela premissa do gatilho, ela já deveria estar comprando).
-    // Assim, ao subir o gatilho, o item avança de situação (fora → isca → cai sozinho → no radar)
-    // em vez de desaparecer.
+    // Para as iscas, o pedido é a própria venda extra (o CD repõe o que sai), em caixas inteiras,
+    // mínimo 1 caixa — porque não existe compra fracionada.
+    const pedidoExtra = () => {
+        const m = ajustarAoMultiplo(p, Math.max(0, base.extra));
+        base.pedidoUn = m.temMultiplo ? Math.max(m.ajustado, m.multiplo) : Math.ceil(Math.max(0, base.extra));
+        base.pedidoRS = base.pedidoUn * (p.pf || 0);
+    };
+    // JÁ NO RADAR: estoque livre de hoje já está na régua ou abaixo → caso de COBRANÇA ao
+    // comprador. Vale também quando já há reposição a caminho: a conta da Sugestões desconta o
+    // que vem; se ainda sobra compra, o pedido existe mas é pequeno — "reforçar pedido".
     if (Math.round(dias) <= alvoGatilho) {
         base.classe = 'radar';
         base.normal = Math.max(0, mc.restoMes || 0);
         base.estoqueFim = livre - base.normal;
         base.diasFim = (base.estoqueFim / vm) * 30;
         base.pct = 0;
-        pedidoDe(Math.max(0, Math.min(base.diasFim, alvoGatilho)));
+        pedidoSugestao();
         base.prio = base.pedidoRS / 5;
         return base;
     }
+    // Acima da régua COM reposição a caminho: a entrega vai subir o estoque e anular o esforço de
+    // venda. Não entra em "vender a mais".
+    if (aCaminho > 0) { base.motivo = 'já tem reposição a caminho (' + aCaminho.toLocaleString('pt-BR') + ' un) — a entrega anula o esforço'; return base; }
     base.normal = Math.max(0, mc.restoMes || 0);
     base.precisaSair = Math.max(0, livre - base.gatilhoUn);
     base.extra = base.precisaSair - base.normal;
@@ -4632,13 +4641,7 @@ function calcularAlvo(p) {
     if (base.extra <= 0) base.classe = 'sozinho';
     else if (base.pct <= alvoTeto) base.classe = 'isca';
     else base.classe = 'fora';
-    if (base.classe === 'sozinho') pedidoDe(Math.max(0, Math.min(base.diasFim, alvoGatilho)));
-    else {
-        // Isca / fora: o CD mantém 45 dias, então compra o que vende. Cada unidade vendida ALÉM do
-        // normal, depois de cruzar a linha, ele precisa repor: pedido incremental ≈ venda extra (1:1).
-        base.pedidoUn = Math.max(0, base.extra);
-        base.pedidoRS = base.pedidoUn * (p.pf || 0);
-    }
+    if (base.classe === 'sozinho') pedidoSugestao(); else pedidoExtra();
     // prioridade: valor do pedido gerado por unidade de esforço (esforço mínimo 5% p/ não explodir)
     base.prio = (base.classe === 'sozinho' ? base.pedidoRS : base.vm * (p.pf || 0)) / Math.max(base.pct, 5);
     return base;
@@ -4687,13 +4690,15 @@ function updateAlvo() {
     let prods = originalProducts;
     if (filtroCD.size) prods = prods.filter(p => filtroCD.has(p.cd));
     if (filtroCurva.size) prods = prods.filter(p => filtroCurva.has(p.curva));
-    // Só o que gera decisão: itens com média inflada (venda recente bem abaixo da média) ficam
-    // fora das duas listas — o estoque real deles é maior do que os dias da planilha indicam.
-    const calc = prods.map(calcularAlvo).filter(o => !o.inflada);
-    // Vender a mais = quem cruza a régua até o fim do mês: só com a venda normal (0 un a mais)
-    // ou com esforço extra dentro do teto. Maior pedido gerado primeiro.
-    const vender = calc.filter(o => o.classe === 'isca' || o.classe === 'sozinho').sort((a, b) => b.pedidoRS - a.pedidoRS);
-    const cobrar = calc.filter(o => o.classe === 'radar').sort((a, b) => b.pedidoRS - a.pedidoRS);
+    const calc = prods.map(calcularAlvo);
+    // VENDER A MAIS = quem cruza a régua até o fim do mês (só com a venda normal, 0 un a mais, ou
+    // com esforço dentro do teto). Aqui valem os filtros de esforço de campo: giro mínimo e sem
+    // média inflada (estoque real maior do que os dias da planilha indicam).
+    const vender = calc.filter(o => (o.classe === 'isca' || o.classe === 'sozinho') && !o.giroBaixo && !o.inflada)
+        .sort((a, b) => b.pedidoRS - a.pedidoRS);
+    // COBRAR PEDIDO = já abaixo da régua, nada a caminho, com compra > 0 pela conta da Sugestões.
+    // Sem filtro de giro ou de média: o comprador compra pelos números da planilha dele.
+    const cobrar = calc.filter(o => o.classe === 'radar' && o.pedidoUn > 0).sort((a, b) => b.pedidoRS - a.pedidoRS);
     const soma = (l, k) => l.reduce((s, o) => s + o[k], 0);
 
     if (kpisEl) kpisEl.innerHTML = `<div class="alvo-kpis">
@@ -4705,7 +4710,7 @@ function updateAlvo() {
     const lista = foco === 'cobrar' ? cobrar : vender;
     alvoListaAtual = lista;
     const intro = foco === 'cobrar'
-        ? `<div class="rec-intro"><strong>Cobrar pedido</strong>: já estão abaixo de ${alvoGatilho} dias e não têm nada a caminho. A distribuidora já deveria estar comprando.</div>`
+        ? `<div class="rec-intro"><strong>Cobrar pedido</strong>: já estão abaixo de ${alvoGatilho} dias. Onde não há nada a caminho, a distribuidora deveria estar comprando; onde já há, o pedido existente é insuficiente e o valor mostrado é o <strong>reforço</strong> que falta (mesma conta da aba Sugestões).</div>`
         : `<div class="rec-intro"><strong>Vender a mais</strong>: vendendo a quantidade indicada além do normal até o fim do mês, o estoque do CD fica abaixo de ${alvoGatilho} dias e ele passa a comprar. <strong>0 un</strong> = basta manter o ritmo normal de venda.</div>`;
     if (!lista.length) { container.innerHTML = intro + '<div class="empty-state">Nenhum produto nesta lista.</div>'; return; }
     container.innerHTML = intro + renderAlvoTable(lista, filtroCD.size === 1, foco);
@@ -4721,7 +4726,8 @@ function renderAlvoTable(lista, hideCD, foco) {
             <td title="${escapeHtml(rotuloProduto(o.p))}">${truncate(rotuloProduto(o.p), 40)}</td>
             <td><span class="curva-badge curva-${o.p.curva}">${o.p.curva}</span></td>
             <td style="text-align:right;">${Math.round(o.dias)} d</td>
-            ${vender ? `<td style="text-align:right;">${o.extra > 0 ? `<span class="alvo-extra">${r0(o.extra)} un</span>` : '<span class="alvo-extra zero">0 · manter ritmo</span>'}</td>` : ''}
+            ${vender ? `<td style="text-align:right;">${o.extra > 0 ? `<span class="alvo-extra">${r0(o.extra)} un</span>` : '<span class="alvo-extra zero">0 · manter ritmo</span>'}</td>`
+                     : `<td style="text-align:right;">${o.aCaminho > 0 ? `<span style="color:#0891b2;font-weight:600;">${r0(o.aCaminho)} un</span><div style="font-size:0.7rem;color:var(--text-secondary);">reforçar</div>` : '<span style="color:#cbd5e1;">—</span>'}</td>`}
             <td style="text-align:right;"><strong style="color:var(--primary);">${formatBRLCheio(o.pedidoRS)}</strong></td>
         </tr>`).join('');
     const th = (l, al, t) => `<th style="text-align:${al};"${t ? ` title="${t}"` : ''}>${l}</th>`;
@@ -4734,7 +4740,7 @@ function renderAlvoTable(lista, hideCD, foco) {
                 ${th('Produto', 'left')}
                 ${th('Curva', 'left')}
                 ${th('Estoque hoje', 'right', 'Dias de estoque livre hoje')}
-                ${vender ? th('Vender a mais até o fim do mês', 'right', 'Unidades além da venda normal para o estoque ficar abaixo da régua') : ''}
+                ${vender ? th('Vender a mais até o fim do mês', 'right', 'Unidades além da venda normal para o estoque ficar abaixo da régua') : th('Já a caminho', 'right', 'Pedido já existente (trânsito + entrega). Quando há, o pedido gerado é o reforço que ainda falta.')}
                 ${th('Pedido gerado', 'right', vender ? 'A venda extra, que o CD precisa repor (a preço de fábrica)' : 'Reposição esperada até a régua (a preço de fábrica)')}
             </tr></thead>
             <tbody>${rows}</tbody>
@@ -4751,18 +4757,19 @@ function exportarAlvoExcel() {
     const linhas = alvoListaAtual.map(o => {
         const l = { 'CD': o.p.cd, 'Material': o.p.material, 'SAP': limpa(o.p.codigoSAP), 'Curva': o.p.curva, 'Estoque Hoje (dias)': Math.round(o.dias) };
         if (vender) l['Vender a Mais até o Fim do Mês (un)'] = Math.round(Math.max(0, o.extra));
+        else l['Já a Caminho (un)'] = Math.round(o.aCaminho);
+        l['Pedido Gerado (un)'] = Math.round(o.pedidoUn);
         l['Pedido Gerado (R$ PF)'] = +o.pedidoRS.toFixed(2);
         return l;
     });
     const ws = XLSX.utils.json_to_sheet(linhas);
     const n = Object.keys(linhas[0]).length, col = XLSX.utils.encode_col;
-    ws['!cols'] = (vender ? [8, 40, 10, 7, 14, 22, 18] : [8, 40, 10, 7, 14, 18]).map(w => ({ wch: w }));
+    ws['!cols'] = [8, 40, 10, 7, 14, vender ? 22 : 14, 14, 18].map(w => ({ wch: w }));
     ws['!autofilter'] = { ref: `A1:${col(n - 1)}${linhas.length + 1}` };
     ws['!rows'] = [{ hpt: 30 }];
     for (let c = 0; c < n; c++) { const cel = ws[col(c) + '1']; if (cel) cel.s = (c <= 1) ? XLS_HEADER_LEFT : XLS_HEADER; }
-    const est = [xlsEstiloTexto('left'), xlsEstiloTexto('left', true), xlsEstiloTexto('center'), null, xlsEstiloNum(FMT_INT)];
-    if (vender) est.push({ ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } });
-    est.push({ ...xlsEstiloNum(FMT_BRL), font: { bold: true } });
+    const est = [xlsEstiloTexto('left'), xlsEstiloTexto('left', true), xlsEstiloTexto('center'), null, xlsEstiloNum(FMT_INT),
+        { ...xlsEstiloNum(FMT_INT), font: { bold: true, color: { rgb: 'FF0E7490' } } }, xlsEstiloNum(FMT_INT), { ...xlsEstiloNum(FMT_BRL), font: { bold: true } }];
     alvoListaAtual.forEach((o, i) => {
         const r = i + 2;
         est.forEach((s, c) => { const cel = ws[col(c) + r]; if (cel && s) cel.s = s; });
@@ -5071,7 +5078,7 @@ function formatBRLCheio(v) {
     return 'R$ ' + Math.round(v || 0).toLocaleString('pt-BR');
 }
 
-const SCRIPT_VERSAO = '2026-10-21g';
+const SCRIPT_VERSAO = '2026-10-21i';
 console.log('Dashboard pronto · script v' + SCRIPT_VERSAO + ' · SheetJS:', typeof XLSX !== 'undefined' ? 'carregado' : 'NÃO carregado');
 
 // ANTI-CACHE: a cada abertura, pede ao navegador que rebaixe script.js, style.css e index.html
